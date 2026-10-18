@@ -180,10 +180,23 @@ def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str
     shadow_c = ass_color(st["shadowColor"], st["shadowOpacity"])
     shadow_d = max(0.0, _num(st["shadowDepth"]))
 
+    blur = _num(st["blur"])
+    # libass blurs the outline when there is one, otherwise the letters themselves.
+    # Without an outline, "edge softness" goes on a shadow-only layer so the text
+    # stays sharp, matching the preview. Its fill is &HFE (not &HFF): libass skips
+    # the shadow of a fully transparent glyph.
+    soft_shadow = blur > 0 and outline_w == 0 and shadow_d > 0
+    text_blur = blur if outline_w > 0 else 0.0
+
     styles = [
         f"Style: Main,{font},{size:g},{primary},{secondary},{outline_c},{shadow_c},"
-        f"{bold},{italic},0,0,100,100,{spacing:g},0,1,{outline_w:g},{shadow_d:g},{align},{ml},{mr},{mv},1"
+        f"{bold},{italic},0,0,100,100,{spacing:g},0,1,{outline_w:g},{0 if soft_shadow else shadow_d:g},{align},{ml},{mr},{mv},1"
     ]
+    if soft_shadow:
+        styles.append(
+            f"Style: Shade,{font},{size:g},&HFE000000,&HFE000000,&HFF000000,{shadow_c},"
+            f"{bold},{italic},0,0,100,100,{spacing:g},0,1,0,{shadow_d:g},{align},{ml},{mr},{mv},1"
+        )
     if st["boxEnabled"]:
         box_c = ass_color(st["boxColor"], st["boxOpacity"])
         pad = max(0.0, _num(st["boxPadding"]))
@@ -215,23 +228,28 @@ def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str
     prefix = ""
     if st["posX"] is not None and st["posY"] is not None:
         prefix += f"\\an{align}\\pos({_num(st['posX']):.0f},{_num(st['posY']):.0f})"
-    blur = _num(st["blur"])
-    if blur > 0:
-        prefix += f"\\blur{blur:g}"
     fade_in, fade_out = int(_num(st["fadeIn"])), int(_num(st["fadeOut"]))
     hl = ass_inline_color(st["highlightColor"])
     scale = _num(st["highlightScale"], 100)
-    # \r resets overrides to the event's style; re-apply blur afterwards.
-    reset = "{\\r" + (f"\\blur{blur:g}" if blur > 0 else "") + "}"
+    # \r resets overrides to the event's style; emit() re-applies that layer's blur.
+    reset = "{\\r\x00}"
 
     events: list[str] = []
 
     def emit(start: float, end: float, body: str, fin: int, fout: int):
-        tags = prefix + (f"\\fad({fin},{fout})" if (fin or fout) else "")
-        text = (f"{{{tags}}}" if tags else "") + body
+        fade = f"\\fad({fin},{fout})" if (fin or fout) else ""
+
+        def event(layer: int, style_name: str, layer_blur: float) -> str:
+            b = f"\\blur{layer_blur:g}" if layer_blur > 0 else ""
+            tags = prefix + b + fade
+            text = (f"{{{tags}}}" if tags else "") + body.replace("\x00", b)
+            return f"Dialogue: {layer},{ass_time(start)},{ass_time(end)},{style_name},,0,0,0,,{text}"
+
         if st["boxEnabled"]:
-            events.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Box,,0,0,0,,{text}")
-        events.append(f"Dialogue: 1,{ass_time(start)},{ass_time(end)},Main,,0,0,0,,{text}")
+            events.append(event(0, "Box", blur))
+        if soft_shadow:
+            events.append(event(1, "Shade", blur))
+        events.append(event(2, "Main", text_blur))
 
     for cue in _valid_cues(cues):
         lines = cue.get("lines", [])

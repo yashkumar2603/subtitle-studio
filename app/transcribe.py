@@ -23,6 +23,7 @@ os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 # The UI shows its own download progress; keep the terminal clean.
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 os.environ.setdefault("HF_HUB_VERBOSITY", "error")
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")  # Windows without Developer Mode: cache copies files, still works
 
 MODELS = [
     {"id": "large-v3-turbo", "label": "Large v3 Turbo (recommended)", "size": "1.6 GB"},

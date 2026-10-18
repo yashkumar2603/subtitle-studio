@@ -119,6 +119,18 @@ def test_reveal_colors_newest_word_and_hides_upcoming():
     assert events[2].count("\\1c") == 1               # earlier words back to base color
 
 
+def test_edge_softness_without_outline_keeps_text_sharp():
+    # libass blurs the glyphs themselves when there is no outline (text smeared on export).
+    ass = subs.build_ass([cue(0, 2, "soft shadow")], {"outlineWidth": 0, "shadowDepth": 2, "blur": 10}, 1920, 1080)
+    main = [l for l in ass.splitlines() if l.startswith("Dialogue") and ",Main," in l]
+    shade = [l for l in ass.splitlines() if l.startswith("Dialogue") and ",Shade," in l]
+    assert main and "\\blur" not in main[0]
+    assert shade and "\\blur10" in shade[0]
+    assert ",&HFE000000,&HFE000000,&HFF000000," in ass  # not &HFF: libass drops shadows of invisible glyphs
+    with_outline = subs.build_ass([cue(0, 2, "glow")], {"outlineWidth": 3, "blur": 10}, 1920, 1080)
+    assert ",Shade," not in with_outline and "\\blur10" in with_outline
+
+
 def test_interrupted_model_download_is_not_treated_as_cached(tmp_path):
     """A snapshot without model.bin (download cut off by closing the app) must be re-downloaded."""
     import os
