@@ -16,7 +16,7 @@ class ProjectStore:
     def __init__(self, data_dir: Path):
         self.root = data_dir / "projects"
         self.root.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def dir(self, pid: str) -> Path:
         if not pid.isalnum():
@@ -85,13 +85,14 @@ class ProjectStore:
             os.replace(tmp, d / "project.json")
 
     def update(self, pid: str, **fields) -> dict:
-        project = self.load(pid)
-        if project is None:
-            raise KeyError(pid)
-        project.update(fields)
-        project["updated"] = time.time()
-        self.save(project)
-        return project
+        with self._lock:
+            project = self.load(pid)
+            if project is None:
+                raise KeyError(pid)
+            project.update(fields)
+            project["updated"] = time.time()
+            self.save(project)
+            return project
 
     def recent(self, limit: int = 20) -> list[dict]:
         out = []
@@ -114,6 +115,14 @@ class ProjectStore:
                 )
         out.sort(key=lambda p: p["updated"], reverse=True)
         return out[:limit]
+
+    def attach_music(self, pid: str, track: dict) -> dict:
+        """Publish a completed import without overwriting concurrent editor saves."""
+        with self._lock:
+            project = self.load(pid)
+            if project is None:
+                raise KeyError(pid)
+            return self.update(pid, musicTrack=track, music={**(project.get("music") or {}), "enabled": True})
 
     def playback_path(self, project: dict) -> Path:
         if project.get("needsProxy"):

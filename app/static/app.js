@@ -3,6 +3,7 @@ import {
   letterAnimated, letterTimeline,
 } from "./layout.js";
 import { BUILTIN_PRESETS, SWATCHES } from "./presets.js";
+import { DEFAULT_MUSIC, MusicPlayer } from "./music.js";
 
 // ------------------------------------------------------------------ helpers
 
@@ -97,10 +98,13 @@ const S = {
   exportMode: "burn",
   scale: 1,
   playRes: [1920, 1080],
+  music: { ...DEFAULT_MUSIC },
+  musicTrack: null,
 };
 
 const video = $("#video");
 const layer = $("#subsLayer");
+const musicPlayer = new MusicPlayer(video, (message) => toast(message, "error"));
 
 // ------------------------------------------------------------------ init
 
@@ -171,6 +175,7 @@ async function showWelcome() {
   $("#projectName").textContent = "";
   history.replaceState(null, "", location.pathname);
   video.pause();
+  musicPlayer.setTrack(null);
   try {
     const recent = await api("/api/projects");
     const ul = $("#recentList");
@@ -234,7 +239,11 @@ function defaultStyle() {
 }
 
 async function loadProject(project, proxyJob) {
+  video.pause();
   S.project = project;
+  S.music = { ...DEFAULT_MUSIC, ...(project.music || {}) };
+  S.musicTrack = project.musicTrack || null;
+  syncMusic();
   S.segments = project.segments || [];
   S.style = project.style ? { ...S.system.defaultStyle, ...project.style } : defaultStyle();
   if (!S.fontMap.has(S.style.fontFamily)) S.style.fontFamily = resolveFont([S.style.fontFamily, ...BUILTIN_PRESETS[0].fonts]);
@@ -274,7 +283,7 @@ const saveNow = async () => {
   try {
     await api(`/api/project/${S.project.id}`, {
       method: "PUT",
-      json: { segments: S.segments, style: S.style, layout: S.layout },
+      json: { segments: S.segments, style: S.style, layout: S.layout, music: S.music },
     });
     $("#saveState").textContent = "Saved";
   } catch (e) {
@@ -285,7 +294,7 @@ const saveNow = async () => {
 const scheduleSave = debounce(saveNow, 700);
 
 function snapshot() {
-  return JSON.stringify({ segments: S.segments, style: S.style, layout: S.layout });
+  return JSON.stringify({ segments: S.segments, style: S.style, layout: S.layout, music: S.music });
 }
 let lastPush = { key: null, time: 0 };
 function pushUndo(key = null) {
@@ -304,6 +313,8 @@ function restore(snap) {
   S.segments = o.segments;
   S.style = o.style;
   S.layout = o.layout;
+  S.music = { ...DEFAULT_MUSIC, ...o.music };
+  syncMusic();
   syncControls();
   renderFontButton();
   ensureFont(S.style.fontFamily).then(recompute);
@@ -431,6 +442,7 @@ function recompute() {
     if (!S.project) return;
     const { measure, limit } = makeMeasure();
     S.cues = buildCues(S.segments, S.layout, measure, limit);
+    syncMusic();
     renderTimeline();
     lastOverlayKey = null;
     renderOverlay();
@@ -1227,6 +1239,11 @@ function syncControls() {
     if (el.type === "checkbox") el.checked = !!st[k];
     else el.value = st[k] ?? "";
   }
+  for (const el of $$("[data-color-for]")) {
+    el.value = String(st[el.dataset.colorFor] || "").toUpperCase();
+    el.setCustomValidity("");
+    el.removeAttribute("aria-invalid");
+  }
   for (const out of $$("output[data-for]")) {
     const k = out.dataset.for;
     out.textContent = `${st[k]}${STYLE_UNITS[k] ?? ""}`;
@@ -1272,6 +1289,57 @@ function onStyleInput(el) {
   recompute();
   renderPresetsActive();
   scheduleSave();
+}
+
+function bindColorCodes() {
+  for (const picker of $$('input[type="color"][data-style]')) {
+    const group = document.createElement("div");
+    group.className = "color-picker";
+    picker.before(group);
+    group.appendChild(picker);
+    const code = document.createElement("input");
+    code.type = "text";
+    code.className = "color-code";
+    code.dataset.colorFor = picker.dataset.style;
+    code.placeholder = "#RRGGBB";
+    code.autocomplete = "off";
+    code.spellcheck = false;
+    const name = group.parentElement.querySelector("label")?.textContent.trim() || "Color";
+    picker.setAttribute("aria-label", `${name} picker`);
+    code.setAttribute("aria-label", `${name} hex color code`);
+    code.title = "Hex color: #RRGGBB or #RGB (the # is optional). Press Enter or leave the field to apply.";
+    group.appendChild(code);
+    const clearError = () => {
+      code.setCustomValidity("");
+      code.removeAttribute("aria-invalid");
+    };
+    const commit = () => {
+      let hex = code.value.trim().replace(/^#/, "");
+      if (!/^(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(hex)) {
+        code.setCustomValidity("Use 3 or 6 hex digits, for example #F80 or #FF8800.");
+        code.setAttribute("aria-invalid", "true");
+        code.reportValidity();
+        return;
+      }
+      if (hex.length === 3) hex = hex.replace(/./g, "$&$&");
+      const color = `#${hex.toLowerCase()}`;
+      clearError();
+      code.value = color.toUpperCase();
+      if (picker.value !== color) {
+        picker.value = color;
+        onStyleInput(picker);
+      }
+    };
+    code.addEventListener("input", clearError);
+    code.addEventListener("change", commit);
+    code.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); commit(); }
+      else if (e.key === "Escape") {
+        code.value = picker.value.toUpperCase();
+        clearError();
+      }
+    });
+  }
 }
 
 function onLayoutInput(el) {
@@ -1386,6 +1454,62 @@ function saveCurrentPreset() {
 
 // ------------------------------------------------------------------ export + render
 
+function syncMusic() {
+  for (const el of $$("[data-music]")) {
+    const key = el.dataset.music;
+    if (el.type === "checkbox") el.checked = S.music[key];
+    else el.value = S.music[key];
+    el.disabled = key !== "videoVolume" && !S.musicTrack;
+  }
+  $$("[data-for-music]").forEach((el) => { el.textContent = `${S.music[el.dataset.forMusic]}%`; });
+  $("#musicTrack").textContent = S.musicTrack
+    ? `${S.musicTrack.name} · ${fmtTime(S.musicTrack.duration, false)}` : "No music added yet.";
+  $("#musicTimingHint").textContent = S.cues.length
+    ? "Volume follows your edited subtitle timings. Music ducks 200 ms before speech and rises over 350 ms afterward."
+    : "Add subtitles to make music adapt to speech. Without subtitles, music uses the no-voice volume.";
+  musicPlayer.setTrack(S.musicTrack ? `/api/project/${S.project.id}/music/${S.musicTrack.id}` : null);
+  musicPlayer.update(S.music, S.cues, S.project?.info.duration || 0);
+}
+
+let mJobId = null;
+let musicImportBusy = false;
+async function addMusic(file = null) {
+  if (!S.project || musicImportBusy) return;
+  const pid = S.project.id;
+  const source = $("#musicSource").value.trim();
+  if (!file && !source) return toast("Choose a file or paste an audio path / YouTube link.", "error");
+  musicImportBusy = true;
+  $("#btnAddMusic").disabled = $("#btnChooseMusic").disabled = $("#musicUpload").disabled = true;
+  const box = $("#mJob");
+  showJob(box, { progress: -1, message: file ? "Uploading music…" : "Starting music import…" });
+  try {
+    let result;
+    if (file) {
+      const data = new FormData();
+      data.append("file", file);
+      result = await api(`/api/project/${pid}/music/upload`, { method: "POST", body: data });
+    } else result = await api(`/api/project/${pid}/music`, { json: { source } });
+    mJobId = result.jobId;
+    $("#btnCancelM").classList.remove("hidden");
+    const job = await pollJob(mJobId, (j) => { if (S.project?.id === pid) showJob(box, j); });
+    if (S.project?.id === pid) {
+      S.musicTrack = job.result.track;
+      S.music.enabled = true;
+      syncMusic();
+      await saveNow();
+      toast("Music ready. Play the video to hear the mix.", "ok");
+    }
+  } catch (e) {
+    if (!e.cancelled) toast("Music import failed: " + e.message, "error");
+  } finally {
+    musicImportBusy = false;
+    mJobId = null;
+    box.classList.add("hidden");
+    $("#btnCancelM").classList.add("hidden");
+    $("#btnAddMusic").disabled = $("#btnChooseMusic").disabled = $("#musicUpload").disabled = false;
+  }
+}
+
 function fillEncoders() {
   const sel = $("#eEncoder");
   const prev = sel.value;
@@ -1402,8 +1526,8 @@ function syncExportMode() {
   $("#modeHint").textContent = burn
     ? "Subtitles become part of the picture with your exact style. Works everywhere (Instagram, WhatsApp, TVs)."
     : $("#eContainer").value === "mkv"
-      ? "Fast (no re-encode). MKV keeps your styling (VLC, mpv). Viewers can switch subtitles off."
-      : "Fast (no re-encode). MP4 subtitle tracks are plain text: players use their own style.";
+      ? "Video is copied; audio is mixed if changed. MKV keeps your styling (VLC, mpv). Viewers can switch subtitles off."
+      : "Video is copied; audio is mixed if changed. MP4 subtitle tracks are plain text: players use their own style.";
 }
 
 async function exportSubs(fmt) {
@@ -1418,10 +1542,12 @@ async function exportSubs(fmt) {
 
 let rJobId = null;
 async function startRender(test = false) {
-  if (!S.cues.length) return toast("No subtitles yet — transcribe first.", "error");
+  if (musicImportBusy) return toast("Wait for the music import to finish.", "error");
+  if (!S.cues.length && !S.music.enabled && S.music.videoVolume === 100) return toast("No subtitles or audio changes yet.", "error");
   const body = {
     cues: cuesForServer(),
     style: S.style,
+    music: S.music,
     mode: S.exportMode,
     container: $("#eContainer").value,
     encoder: $("#eEncoder").value,
@@ -1577,6 +1703,7 @@ function bindStatic() {
   };
 
   // style
+  bindColorCodes();
   for (const el of $$("[data-style]")) el.addEventListener("input", () => onStyleInput(el));
   for (const sw of $$("[data-swatch]")) {
     for (const c of SWATCHES) {
@@ -1686,6 +1813,21 @@ function bindStatic() {
     }
   }
 
+  // music
+  $("#musicForm").onsubmit = (e) => { e.preventDefault(); addMusic(); };
+  $("#btnChooseMusic").onclick = () => $("#musicUpload").click();
+  $("#musicUpload").onchange = (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (file) addMusic(file);
+  };
+  $("#btnCancelM").onclick = () => mJobId && api(`/api/jobs/${mJobId}/cancel`, { json: {} });
+  for (const el of $$("[data-music]")) el.addEventListener("input", () => {
+    pushUndo(`music-${el.dataset.music}`);
+    S.music[el.dataset.music] = el.type === "checkbox" ? el.checked : +el.value;
+    syncMusic();
+    scheduleSave();
+  });
   // export
   $$("[data-export]").forEach((b) => (b.onclick = () => exportSubs(b.dataset.export)));
   for (const b of $$("[data-export-radio] button")) {

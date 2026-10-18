@@ -23,7 +23,8 @@ Works on **Windows**, **Linux** and **macOS**. Uses an NVIDIA GPU when one is pr
   in the same coordinate system and font metrics libass uses. **Exact frame** renders the current
   frame through ffmpeg so you can compare.
 - **Styling**: any font installed on the system (plus your own .ttf/.otf uploads), size, bold,
-  italic, ALL CAPS, letter spacing, text/outline/shadow colors and opacity, edge softness (glow),
+  italic, ALL CAPS, letter spacing, text/outline/shadow colors and opacity (with editable hex codes
+  beside every color picker: #RRGGBB or #RGB), edge softness (glow),
   background box, fade in/out, 9-point alignment, margins, or **drag the subtitle anywhere** on the video.
   Any single line can get its own position (⌖ in the editor), overriding the global one.
 - **13 presets** (Classic, YouTube, Netflix, TikTok Pop, Karaoke, Word Reveal, Typewriter, Yellow DVD,
@@ -37,9 +38,13 @@ Works on **Windows**, **Linux** and **macOS**. Uses an NVIDIA GPU when one is pr
   close small gaps, remove commas and periods.
 - **Editor**: edit text and timings, split at the cursor, merge, delete, add lines, find & replace,
   shift all timings (fix sync), undo/redo, autosave, click-to-seek timeline. Import existing .srt/.vtt.
+- **Music**: choose an audio file, paste a local path, or paste a YouTube video link. Set separate
+  music volumes for speech and gaps, plus the original video's volume. Subtitle timings drive smooth
+  ducking (200 ms before speech, 350 ms release); short gaps stay quiet. Short music tracks loop.
+  Hear the mix in the player, then export it with either burned or switchable subtitles.
 - **Export**: burned-in MP4/MKV (CPU x264 or GPU NVENC / QuickSync / AMF when available; quality,
   speed and resolution options), a 10-second **test render** from the playhead, soft subtitle tracks
-  (MP4 text track, or MKV with full ASS styling and embedded fonts — no re-encode), and SRT / VTT /
+  (MP4 text track, or MKV with full ASS styling and embedded fonts — video is copied), and SRT / VTT /
   styled ASS / plain-text transcript files.
 - Videos the browser can't play (e.g. HEVC from iPhones) get an automatic 720p preview proxy;
   the final render always uses the original file.
@@ -78,8 +83,18 @@ uv run python -m app    # options: --port 7860  --no-browser  --host 127.0.0.1
 4. **Style**: pick a preset, then adjust font, colors, size and position. Drag the subtitle on
    the video to place it. Press **Exact frame** to see precisely what the render will look like.
 5. **Wrapping**: control line length, number of lines and timing.
-6. **Export**: try **Test 10 s** first, then **Render video**. The file is saved next to the
+6. **Music** (optional): choose an audio file or paste a file path / YouTube link, then click
+   **Add music**. Set **No voice**, **Voice**, and **Video volume**, then play the video to hear them.
+   These settings autosave with the project. With no subtitles, music stays at the no-voice volume.
+7. **Export**: try **Test 10 s** first, then **Render video**. The file is saved next to the
    original video, e.g. `My video (subtitled).mp4`.
+
+Music files are copied into the project's data folder as AAC so moving the original audio file
+doesn't break the soundtrack. YouTube imports use [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+and require internet. Restricted videos or YouTube login challenges can prevent a download;
+use a local audio file in that case. If Node.js is installed, yt-dlp also uses it for YouTube's
+JavaScript challenges. Nothing from your video is uploaded. Audio exports mix into one AAC
+track, with a limiter to prevent clipping; unmodified audio remains a stream copy.
 
 Keyboard: `Space` play/pause · `←`/`→` seek 2 s (`Shift` = 5 s) · `Ctrl+Z` / `Ctrl+Y` undo/redo · `Ctrl+S` save.
 

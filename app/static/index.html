@@ -92,6 +92,7 @@
         <button data-tab="transcribe" class="active">Transcribe</button>
         <button data-tab="style">Style</button>
         <button data-tab="layout">Wrapping</button>
+        <button data-tab="music">Music</button>
         <button data-tab="export">Export</button>
       </nav>
 
@@ -368,6 +369,47 @@
           </div>
         </div>
         <div class="stats muted small" id="layoutStats"></div>
+      </div>
+
+      <!-- ---------- Music ---------- -->
+      <div class="panel hidden" data-panel="music">
+        <h3>Music &amp; audio</h3>
+        <p class="muted small">Add a soundtrack. Music lowers while subtitles are on screen and rises in the gaps, with smooth transitions.</p>
+        <form id="musicForm" class="music-source">
+          <label for="musicSource">Audio file path or YouTube link</label>
+          <input type="text" id="musicSource" placeholder="/path/to/music.mp3 or https://youtu.be/…" spellcheck="false" />
+          <div class="row">
+            <button class="btn primary grow" id="btnAddMusic" type="submit">Add music</button>
+            <button class="btn" type="button" id="btnChooseMusic">Choose file</button>
+            <input type="file" id="musicUpload" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.opus,.aac,.wma" hidden />
+          </div>
+        </form>
+        <div class="job hidden" id="mJob" role="status"><div class="bar"><i></i></div><div class="job-msg"></div></div>
+        <button class="btn danger hidden" id="btnCancelM">Cancel import</button>
+        <div class="music-track" id="musicTrack" role="status">No music added yet.</div>
+        <label class="check"><input type="checkbox" id="musicEnabled" data-music="enabled" /> Include background music</label>
+
+        <h4>Music volume</h4>
+        <div class="field">
+          <label for="mNoVoice">No voice <output data-for-music="noVoiceVolume"></output></label>
+          <input id="mNoVoice" type="range" data-music="noVoiceVolume" min="0" max="100" step="1" />
+          <div class="hint">Between subtitles.</div>
+        </div>
+        <div class="field">
+          <label for="mVoice">Voice <output data-for-music="voiceVolume"></output></label>
+          <input id="mVoice" type="range" data-music="voiceVolume" min="0" max="100" step="1" />
+          <div class="hint">While a subtitle is on screen.</div>
+        </div>
+        <h4>Original video</h4>
+        <div class="field">
+          <label for="mVideo">Video volume <output data-for-music="videoVolume"></output></label>
+          <input id="mVideo" type="range" data-music="videoVolume" min="0" max="100" step="1" />
+          <div class="hint">All original audio, including speech. Set to 0% to mute it.</div>
+        </div>
+        <div class="notes">
+          <div>Play the video to hear the mix. Short tracks loop to cover the video. Replacing music keeps your volume settings.</div>
+          <div id="musicTimingHint">Add subtitles to make music adapt to speech. Without subtitles, music uses the no-voice volume.</div>
+        </div>
       </div>
 
       <!-- ---------- Export ---------- -->

@@ -13,6 +13,7 @@ dependencies = [
     "imageio-ffmpeg>=0.6.0",
     "python-multipart>=0.0.32",
     "uvicorn[standard]>=0.54.0",
+    "yt-dlp[default]>=2026.8.19",
 ]
 
 [project.optional-dependencies]

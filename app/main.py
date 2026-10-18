@@ -5,17 +5,20 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import threading
+import tempfile
+import uuid
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import media, procs, subs, transcribe
+from . import media, music, procs, subs, transcribe
 from .fonts import FontLibrary
 from .jobs import Job, JobManager
 from .projects import ProjectStore
@@ -250,6 +253,11 @@ def get_project(pid: str):
 def save_project(pid: str, body: dict = Body(...)):
     _project(pid)
     allowed = {k: body[k] for k in ("segments", "style", "layout", "language") if k in body}
+    if "music" in body:
+        try:
+            allowed["music"] = music.MusicSettings.model_validate(body["music"]).model_dump()
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     store.update(pid, **allowed)
     return {"ok": True}
 
@@ -261,6 +269,94 @@ def project_media(pid: str):
     if not path.exists():
         raise HTTPException(404, "Video file is missing")
     return FileResponse(path)
+
+
+# ------------------------------------------------------------------ music
+
+_music_lock = threading.Lock()
+
+
+def _track_path(pid: str, track_id: str) -> Path:
+    if not re.fullmatch(r"[a-f0-9]{32}", track_id):
+        raise HTTPException(400, "Invalid music track")
+    return store.dir(pid) / "music" / f"{track_id}.m4a"
+
+
+def _start_music(pid: str, workdir: Path, name: str, source: Path | None = None, url: str | None = None):
+    def work(job: Job):
+        track_id = uuid.uuid4().hex
+        dest = _track_path(pid, track_id)
+        job.cleanup_paths = [workdir]
+        try:
+            audio_source = music.download(url, workdir, job) if url else source
+            prepared = workdir / "prepared.m4a"
+            duration = music.prepare(audio_source, prepared, job)
+            job.check()
+            dest.parent.mkdir(exist_ok=True)
+            os.replace(prepared, dest)
+            track = {"id": track_id, "name": name, "duration": duration,
+                     "source": "youtube" if url else "file"}
+            store.attach_music(pid, track)
+            return {"track": track}
+        except BaseException:
+            dest.unlink(missing_ok=True)
+            raise
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+    with _music_lock:
+        if any(j.kind == "music" and j.project_id == pid for j in jobs.active()):
+            shutil.rmtree(workdir, ignore_errors=True)
+            raise HTTPException(409, "Music is already being imported for this video")
+        return {"jobId": jobs.start("music", work, pid).id}
+
+
+@app.post("/api/project/{pid}/music")
+def import_music(pid: str, body: dict = Body(...)):
+    _project(pid)
+    value = str(body.get("source") or "").strip().strip('"').strip("'")
+    if not value:
+        raise HTTPException(400, "Choose an audio file or paste its path / YouTube link.")
+    url, source = None, None
+    if value.startswith(("https://", "http://")):
+        try:
+            url = music.youtube_url(value)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        name = url
+    else:
+        source = Path(value).expanduser().resolve()
+        if not source.is_file():
+            raise HTTPException(404, "Audio file not found")
+        name = source.name
+    workdir = Path(tempfile.mkdtemp(prefix="music-import-", dir=store.dir(pid)))
+    return _start_music(pid, workdir, name, source, url)
+
+
+@app.post("/api/project/{pid}/music/upload")
+async def upload_music(pid: str, file: UploadFile = File(...)):
+    _project(pid)
+    workdir = Path(tempfile.mkdtemp(prefix="music-import-", dir=store.dir(pid)))
+    try:
+        source = workdir / "upload"
+        with source.open("wb") as dest:
+            while chunk := await file.read(1024 * 1024):
+                if dest.tell() + len(chunk) > 500 * 1024 * 1024:
+                    raise HTTPException(413, "Audio upload limit: 500 MB")
+                dest.write(chunk)
+        return _start_music(pid, workdir, Path(file.filename or "Music").name, source)
+    except BaseException:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise
+
+
+@app.get("/api/project/{pid}/music/{track_id}")
+def music_file(pid: str, track_id: str):
+    _project(pid)
+    path = _track_path(pid, track_id)
+    if not path.is_file():
+        raise HTTPException(404, "Music file is missing. Add it again in Music.")
+    return FileResponse(path, media_type="audio/mp4")
 
 
 @app.post("/api/project/{pid}/import")
@@ -375,8 +471,22 @@ def render(pid: str, body: dict = Body(...)):
     clip = body.get("clip")  # {"start": s, "duration": d} for a quick test render
     info = project["info"]
     src = project["videoPath"]
+    try:
+        audio_settings = music.MusicSettings.model_validate(body.get("music") or project.get("music") or {})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    track_info = project.get("musicTrack") or {}
+    track = _track_path(pid, track_info["id"]) if audio_settings.enabled and track_info else None
+    if audio_settings.enabled and (not track or not track.is_file()):
+        raise HTTPException(400, "Add a music track first, or turn off background music.")
+    start, total = 0.0, info["duration"]
+    if clip and mode != "soft":
+        start = max(0.0, min(float(clip.get("start") or 0), max(0, total - 0.5)))
+        total = min(max(0.5, float(clip.get("duration") or 10)), total - start)
+    else:
+        clip = None
     out_dir = _output_dir(project, body.get("outputDir"))
-    suffix = " (subtitled)" if mode == "burn" else " (soft subs)"
+    suffix = (" (subtitled)" if mode == "burn" else " (soft subs)") if cues else " (music)"
     if clip:
         suffix += " test"
     out = _unique(out_dir / f"{project['name']}{suffix}.{container}")
@@ -386,21 +496,29 @@ def render(pid: str, body: dict = Body(...)):
         workdir = _prepare_workdir(store.dir(pid) / f"render-{job.id}", project, cues, style)
         lang = LANG3.get(project.get("language") or "", "und")
         try:
+            audio_inputs, audio_args = music.render_args(
+                audio_settings, track, cues, info["duration"], start, total,
+                info.get("hasAudio", False), 2 if mode == "soft" and cues else 1, workdir,
+                track_info.get("duration", 0),
+            )
+            if container == "mp4" and info.get("acodec") not in media.MP4_AUDIO and audio_args[-1] == "copy":
+                audio_args[-1] = "aac"
+                audio_args += ["-b:a", "192k"]
             if mode == "soft":
                 if container == "mkv":
                     sub_in, sub_codec = "subs.ass", "ass"
                 else:
                     (workdir / "subs.srt").write_text(subs.build_srt(cues), "utf-8")
                     sub_in, sub_codec = "subs.srt", "mov_text"
-                args = ["-y", "-i", src, "-i", sub_in, "-map", "0:v:0", "-map", "0:a?", "-map", "1:0",
-                        "-c:v", "copy", "-c:a", "copy", "-c:s", sub_codec,
-                        "-metadata:s:s:0", f"language={lang}", "-disposition:s:0", "default"]
-                if container == "mkv":
+                args = ["-y", "-i", src, *(["-i", sub_in] if cues else []), *audio_inputs,
+                        "-map", "0:v:0", *audio_args, "-c:v", "copy"]
+                if cues:
+                    args += ["-map", "1:0", "-c:s", sub_codec,
+                             "-metadata:s:s:0", f"language={lang}", "-disposition:s:0", "default"]
+                if container == "mkv" and cues:
                     for i, f in enumerate(sorted((workdir / "fonts").iterdir())):
                         mt = "application/vnd.ms-opentype" if f.suffix.lower() == ".otf" else "application/x-truetype-font"
                         args += ["-attach", str(f), f"-metadata:s:t:{i}", f"mimetype={mt}"]
-                elif info.get("acodec") not in media.MP4_AUDIO:
-                    args[args.index("-c:a") + 1] = "aac"
                 args += ["-movflags", "+faststart"] if container == "mp4" else []
                 args.append(str(out))
                 media.run_ffmpeg(args, job, info["duration"], cwd=workdir, label="Muxing subtitles")
@@ -409,23 +527,17 @@ def render(pid: str, body: dict = Body(...)):
                 # "720p" means the short side, so portrait videos scale correctly too.
                 if height and height < min(info["width"], info["height"]):
                     vf.append(f"scale={height}:-2" if info["width"] < info["height"] else f"scale=-2:{height}")
-                pre, total = [], info["duration"]
+                pre = []
                 if clip:
-                    start = max(0.0, float(clip.get("start") or 0))
-                    total = max(0.5, min(float(clip.get("duration") or 10), info["duration"] - start))
                     pre = ["-ss", f"{start:.3f}", "-t", f"{total:.3f}"]
                     vf = [f"setpts=PTS+{start:.3f}/TB"] + vf + [media.subtitles_filter(), "setpts=PTS-STARTPTS"]
                 else:
                     vf.append(media.subtitles_filter())
-                args = ["-y", *pre, "-i", src, "-vf", ",".join(vf), "-map", "0:v:0", "-map", "0:a?",
+                args = ["-y", *pre, "-i", src, *audio_inputs, "-vf", ",".join(vf), "-map", "0:v:0", *audio_args,
                         *media.video_codec_args(encoder, quality, speed), "-pix_fmt", "yuv420p"]
                 if clip:
                     # setpts shifts drop the stream frame rate; keep source timestamps (else 25 fps).
                     args += ["-fps_mode", "passthrough"]
-                if container == "mp4" and info.get("acodec") not in media.MP4_AUDIO:
-                    args += ["-c:a", "aac", "-b:a", "192k"]
-                else:
-                    args += ["-c:a", "copy"]
                 if container == "mp4":
                     args += ["-movflags", "+faststart"]
                 args.append(str(out))
