@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Subtitle Studio</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%237c5cff'/><rect x='6' y='19' width='20' height='3.5' rx='1.7' fill='white'/><rect x='9' y='24.5' width='14' height='3' rx='1.5' fill='white' opacity='.7'/></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo"></span>
+      <span>Subtitle Studio</span>
+    </div>
+    <div class="project-name" id="projectName"></div>
+    <div class="top-actions">
+      <span class="pill" id="devicePill" title="Transcription device">…</span>
+      <span class="save-state" id="saveState"></span>
+      <button class="btn ghost" id="btnHome" title="Open another video">Open video</button>
+    </div>
+  </header>
+
+  <!-- ===================== Welcome ===================== -->
+  <main id="welcome" class="welcome">
+    <div class="welcome-card">
+      <h1>Add subtitles to any video</h1>
+      <p class="muted">Speech is transcribed on your computer with open-source Whisper (large-v3-turbo). Nothing is uploaded to the internet.</p>
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" accept="video/*,.mkv,.mov,.mp4,.webm,.avi,.m4v" hidden />
+        <div class="dz-icon">⬆</div>
+        <div><b>Drop a video here</b> or click to choose</div>
+        <div class="muted small">MP4, MOV, MKV, WebM, AVI…</div>
+        <div class="upload-progress hidden" id="uploadProgress"><div class="bar"><i></i></div><span></span></div>
+      </label>
+      <div class="or"><span>or open by path (faster, no copy)</span></div>
+      <form class="path-row" id="pathForm">
+        <input type="text" id="pathInput" placeholder="/home/me/Videos/clip.mp4  or  C:\Users\me\Videos\clip.mp4" spellcheck="false" />
+        <button class="btn primary" type="submit">Open</button>
+      </form>
+      <div id="recentWrap" class="recent hidden">
+        <h3>Recent projects</h3>
+        <ul id="recentList"></ul>
+      </div>
+    </div>
+  </main>
+
+  <!-- ===================== Editor ===================== -->
+  <main id="editor" class="editor hidden">
+    <section class="left">
+      <div class="stage-wrap" id="stageWrap">
+        <div class="stage" id="stage">
+          <video id="video" preload="auto" playsinline></video>
+          <div class="subs-layer" id="subsLayer"></div>
+          <div class="stage-msg hidden" id="stageMsg"></div>
+        </div>
+      </div>
+
+      <div class="transport">
+        <button class="icon-btn" id="btnPlay" title="Play / pause (Space)">▶</button>
+        <span class="time" id="timeLabel">0:00.0 / 0:00</span>
+        <div class="timeline" id="timeline" title="Click to seek">
+          <div class="tl-cues" id="tlCues"></div>
+          <div class="tl-head" id="tlHead"></div>
+        </div>
+        <button class="btn small" id="btnExactFrame" title="Render this exact frame with ffmpeg/libass (what the final video will look like)">Exact frame</button>
+      </div>
+
+      <div class="seg-toolbar">
+        <div class="seg-title">
+          <b>Subtitles</b> <span class="muted small" id="segCount"></span>
+        </div>
+        <div class="seg-tools">
+          <input type="search" id="findInput" placeholder="Find…" />
+          <input type="text" id="replaceInput" placeholder="Replace with…" />
+          <button class="btn small" id="btnReplace" title="Replace all matches">Replace all</button>
+          <span class="sep"></span>
+          <button class="btn small" id="btnAddSeg" title="Add a subtitle at the playhead">+ Add</button>
+          <button class="btn small" id="btnShift" title="Shift all timings (fix audio sync)">Shift timing</button>
+          <button class="icon-btn small" id="btnUndo" title="Undo (Ctrl+Z)">↶</button>
+          <button class="icon-btn small" id="btnRedo" title="Redo (Ctrl+Y)">↷</button>
+          <label class="check small" title="Scroll the list to follow playback"><input type="checkbox" id="followPlay" checked /> Follow</label>
+        </div>
+      </div>
+      <div class="seg-list" id="segList">
+        <div class="empty muted" id="segEmpty">No subtitles yet. Use <b>Transcribe</b> on the right, or import an .srt / .vtt file.</div>
+      </div>
+    </section>
+
+    <aside class="right">
+      <nav class="tabs" id="tabs">
+        <button data-tab="transcribe" class="active">Transcribe</button>
+        <button data-tab="style">Style</button>
+        <button data-tab="layout">Wrapping</button>
+        <button data-tab="export">Export</button>
+      </nav>
+
+      <!-- ---------- Transcribe ---------- -->
+      <div class="panel" data-panel="transcribe">
+        <div class="field">
+          <label>Model</label>
+          <select id="tModel"></select>
+          <div class="hint">Downloaded once, then cached. Turbo is the best speed/accuracy trade-off.</div>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label>Spoken language</label>
+            <select id="tLanguage"></select>
+          </div>
+          <div class="field">
+            <label>Output</label>
+            <select id="tTask">
+              <option value="transcribe">Same language</option>
+              <option value="translate">Translate to English</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label>Device</label>
+            <select id="tDevice">
+              <option value="auto">Auto</option>
+              <option value="cuda">NVIDIA GPU</option>
+              <option value="cpu">CPU</option>
+            </select>
+          </div>
+          <div class="field">
+            <label title="Removes text Whisper invents during music, noise or silence">Noise / music filter</label>
+            <select id="tNoise">
+              <option value="normal">Normal</option>
+              <option value="strict">Strict (noisy videos)</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="tVad" checked /> Skip non-speech audio (voice detection)</label>
+        <label class="check"><input type="checkbox" id="tBatched" /> Fast mode (GPU batched — slightly worse punctuation)</label>
+        <div class="field">
+          <label>Names / words to expect <span class="muted">(optional)</span></label>
+          <input type="text" id="tPrompt" placeholder="e.g. Mridula, Bengaluru, PG, IKEA" />
+          <div class="hint">Helps spell names and slang correctly.</div>
+        </div>
+        <div class="row">
+          <button class="btn primary grow" id="btnTranscribe">Transcribe audio</button>
+          <button class="btn danger hidden" id="btnCancelT">Cancel</button>
+        </div>
+        <div class="job hidden" id="tJob"><div class="bar"><i></i></div><div class="job-msg"></div></div>
+        <div class="notes" id="tNotes"></div>
+        <hr />
+        <div class="row">
+          <label class="btn grow" title="Load existing subtitles instead of transcribing">
+            Import .srt / .vtt <input type="file" id="importInput" accept=".srt,.vtt,text/vtt" hidden />
+          </label>
+        </div>
+      </div>
+
+      <!-- ---------- Style ---------- -->
+      <div class="panel hidden" data-panel="style">
+        <div class="section-head">
+          <h4>Presets</h4>
+          <div>
+            <button class="btn small" id="btnSavePreset">Save current</button>
+            <button class="icon-btn small" id="btnExportPresets" title="Export my presets to a file">⇩</button>
+            <label class="icon-btn small" title="Import presets from a file">⇧<input type="file" id="importPresets" accept=".json" hidden /></label>
+          </div>
+        </div>
+        <div class="presets" id="presets"></div>
+
+        <h4>Font</h4>
+        <div class="field">
+          <div class="font-picker" id="fontPicker">
+            <button class="font-current" id="fontCurrent" type="button"></button>
+            <div class="font-pop hidden" id="fontPop">
+              <input type="search" id="fontSearch" placeholder="Search fonts…" />
+              <div class="font-list" id="fontList"></div>
+              <div class="font-pop-foot">
+                <label class="btn small">Add font file… <input type="file" id="fontUpload" accept=".ttf,.otf,.ttc" hidden /></label>
+                <button class="btn small" id="fontRescan" type="button">Rescan</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="field">
+          <label>Size <output data-for="fontSize"></output></label>
+          <input type="range" data-style="fontSize" min="16" max="240" step="1" />
+        </div>
+        <div class="row wrap">
+          <label class="toggle"><input type="checkbox" data-style="bold" /><span>B</span></label>
+          <label class="toggle"><input type="checkbox" data-style="italic" /><span><i>I</i></span></label>
+          <label class="toggle wide"><input type="checkbox" data-layout="uppercase" /><span>ABC</span></label>
+          <div class="field inline grow">
+            <label>Letter spacing <output data-for="letterSpacing"></output></label>
+            <input type="range" data-style="letterSpacing" min="-5" max="20" step="0.5" />
+          </div>
+        </div>
+
+        <h4>Colors</h4>
+        <div class="color-row">
+          <label>Text</label>
+          <input type="color" data-style="textColor" />
+          <div class="swatches" data-swatch="textColor"></div>
+        </div>
+        <div class="field">
+          <label>Text opacity <output data-for="textOpacity"></output></label>
+          <input type="range" data-style="textOpacity" min="10" max="100" step="1" />
+        </div>
+        <div class="color-row">
+          <label>Outline</label>
+          <input type="color" data-style="outlineColor" />
+          <div class="field inline grow">
+            <label>Width <output data-for="outlineWidth"></output></label>
+            <input type="range" data-style="outlineWidth" min="0" max="16" step="0.5" />
+          </div>
+        </div>
+        <div class="color-row">
+          <label>Shadow</label>
+          <input type="color" data-style="shadowColor" />
+          <div class="field inline grow">
+            <label>Distance <output data-for="shadowDepth"></output></label>
+            <input type="range" data-style="shadowDepth" min="0" max="16" step="0.5" />
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label>Shadow opacity <output data-for="shadowOpacity"></output></label>
+            <input type="range" data-style="shadowOpacity" min="0" max="100" step="1" />
+          </div>
+          <div class="field">
+            <label>Edge softness <output data-for="blur"></output></label>
+            <input type="range" data-style="blur" min="0" max="10" step="0.5" />
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" data-style="boxEnabled" /> Background box</label>
+        <div class="box-opts" id="boxOpts">
+          <div class="color-row">
+            <label>Box</label>
+            <input type="color" data-style="boxColor" />
+            <div class="field inline grow">
+              <label>Opacity <output data-for="boxOpacity"></output></label>
+              <input type="range" data-style="boxOpacity" min="5" max="100" step="1" />
+            </div>
+          </div>
+          <div class="field">
+            <label>Padding <output data-for="boxPadding"></output></label>
+            <input type="range" data-style="boxPadding" min="0" max="40" step="1" />
+          </div>
+        </div>
+
+        <h4>Word highlight</h4>
+        <div class="field">
+          <select data-style="highlightMode">
+            <option value="none">Off</option>
+            <option value="word">Highlight the spoken word</option>
+            <option value="fill">Karaoke fill</option>
+            <option value="reveal">Reveal word by word</option>
+          </select>
+        </div>
+        <div class="color-row hl-opts">
+          <label>Color</label>
+          <input type="color" data-style="highlightColor" />
+          <div class="field inline grow">
+            <label>Pop size <output data-for="highlightScale"></output></label>
+            <input type="range" data-style="highlightScale" min="100" max="150" step="1" />
+          </div>
+        </div>
+
+        <h4>Animation</h4>
+        <div class="grid2">
+          <div class="field">
+            <label>Fade in <output data-for="fadeIn"></output></label>
+            <input type="range" data-style="fadeIn" min="0" max="800" step="10" />
+          </div>
+          <div class="field">
+            <label>Fade out <output data-for="fadeOut"></output></label>
+            <input type="range" data-style="fadeOut" min="0" max="800" step="10" />
+          </div>
+        </div>
+
+        <h4>Position</h4>
+        <div class="pos-row">
+          <div class="align-grid" id="alignGrid">
+            <button data-align="7"></button><button data-align="8"></button><button data-align="9"></button>
+            <button data-align="4"></button><button data-align="5"></button><button data-align="6"></button>
+            <button data-align="1"></button><button data-align="2"></button><button data-align="3"></button>
+          </div>
+          <div class="grow">
+            <div class="field">
+              <label>Vertical margin <output data-for="marginV"></output></label>
+              <input type="range" data-style="marginV" min="0" max="600" step="2" />
+            </div>
+            <div class="grid2">
+              <div class="field">
+                <label>Left <output data-for="marginL"></output></label>
+                <input type="range" data-style="marginL" min="0" max="600" step="2" />
+              </div>
+              <div class="field">
+                <label>Right <output data-for="marginR"></output></label>
+                <input type="range" data-style="marginR" min="0" max="600" step="2" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="hint">Tip: drag the subtitle on the video to place it anywhere. <a href="#" id="resetPos" class="hidden">Reset custom position</a></div>
+      </div>
+
+      <!-- ---------- Layout / wrapping ---------- -->
+      <div class="panel hidden" data-panel="layout">
+        <h4>Line wrapping</h4>
+        <div class="field">
+          <label>Wrap lines by</label>
+          <div class="seg-ctl" data-layout-radio="wrapBy">
+            <button data-value="width">Screen width</button>
+            <button data-value="chars">Characters</button>
+          </div>
+        </div>
+        <div class="field" data-show="wrapBy=width">
+          <label>Max line width <output data-for-layout="maxWidthPct"></output></label>
+          <input type="range" data-layout="maxWidthPct" min="20" max="100" step="1" />
+        </div>
+        <div class="field" data-show="wrapBy=chars">
+          <label>Max characters per line <output data-for-layout="maxChars"></output></label>
+          <input type="range" data-layout="maxChars" min="8" max="80" step="1" />
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label>Max lines <output data-for-layout="maxLines"></output></label>
+            <input type="range" data-layout="maxLines" min="1" max="5" step="1" />
+          </div>
+          <div class="field">
+            <label>Max words <output data-for-layout="maxWords"></output></label>
+            <input type="range" data-layout="maxWords" min="0" max="20" step="1" />
+          </div>
+        </div>
+        <div class="field">
+          <label>When text doesn't fit</label>
+          <div class="seg-ctl" data-layout-radio="overflow">
+            <button data-value="split">Start a new subtitle</button>
+            <button data-value="extend">Add more lines</button>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" data-layout="balance" /> Balance line lengths</label>
+        <label class="check"><input type="checkbox" data-layout="breakOnSentence" /> New subtitle at each sentence</label>
+        <label class="check"><input type="checkbox" data-layout="stripPunct" /> Remove commas &amp; periods</label>
+
+        <h4>Timing</h4>
+        <div class="grid2">
+          <div class="field">
+            <label>Split at pauses over <output data-for-layout="gapSplit"></output></label>
+            <input type="range" data-layout="gapSplit" min="0.2" max="3" step="0.1" />
+          </div>
+          <div class="field">
+            <label>Close gaps under <output data-for-layout="fillGaps"></output></label>
+            <input type="range" data-layout="fillGaps" min="0" max="2" step="0.05" />
+          </div>
+          <div class="field">
+            <label>Min duration <output data-for-layout="minDuration"></output></label>
+            <input type="range" data-layout="minDuration" min="0.2" max="3" step="0.1" />
+          </div>
+          <div class="field">
+            <label>Max duration <output data-for-layout="maxDuration"></output></label>
+            <input type="range" data-layout="maxDuration" min="1" max="15" step="0.5" />
+          </div>
+        </div>
+        <div class="stats muted small" id="layoutStats"></div>
+      </div>
+
+      <!-- ---------- Export ---------- -->
+      <div class="panel hidden" data-panel="export">
+        <h4>Subtitle file</h4>
+        <div class="row wrap">
+          <button class="btn" data-export="srt">SRT</button>
+          <button class="btn" data-export="vtt">VTT</button>
+          <button class="btn" data-export="ass" title="Keeps all styling (fonts, colors, karaoke)">ASS (styled)</button>
+          <button class="btn" data-export="txt" title="Plain transcript">TXT</button>
+        </div>
+
+        <h4>Video</h4>
+        <div class="field">
+          <div class="seg-ctl" data-export-radio="mode">
+            <button data-value="burn">Burn in (always visible)</button>
+            <button data-value="soft">Subtitle track (can turn off)</button>
+          </div>
+          <div class="hint" id="modeHint"></div>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label>Format</label>
+            <select id="eContainer">
+              <option value="mp4">MP4</option>
+              <option value="mkv">MKV</option>
+            </select>
+          </div>
+          <div class="field burn-only">
+            <label>Resolution</label>
+            <select id="eHeight">
+              <option value="0">Original</option>
+              <option value="1080">1080p</option>
+              <option value="720">720p</option>
+              <option value="480">480p</option>
+            </select>
+          </div>
+          <div class="field burn-only">
+            <label>Quality</label>
+            <select id="eQuality">
+              <option value="18">High</option>
+              <option value="22" selected>Balanced</option>
+              <option value="27">Small file</option>
+            </select>
+          </div>
+          <div class="field burn-only">
+            <label>Speed</label>
+            <select id="eSpeed">
+              <option value="fast">Fast</option>
+              <option value="medium" selected>Medium</option>
+              <option value="slow">Slow (smaller)</option>
+            </select>
+          </div>
+        </div>
+        <div class="field burn-only">
+          <label>Encoder</label>
+          <select id="eEncoder"></select>
+        </div>
+        <div class="field">
+          <label>Save to folder <span class="muted">(blank = next to the original video)</span></label>
+          <input type="text" id="eOutDir" spellcheck="false" />
+        </div>
+        <div class="row">
+          <button class="btn primary grow" id="btnRender">Render video</button>
+          <button class="btn burn-only" id="btnTestRender" title="Render 10 seconds from the playhead to check the look">Test 10 s</button>
+        </div>
+        <button class="btn danger hidden" id="btnCancelR">Cancel</button>
+        <div class="job hidden" id="rJob"><div class="bar"><i></i></div><div class="job-msg"></div></div>
+        <div class="result hidden" id="rResult">
+          <video id="rVideo" controls preload="metadata"></video>
+          <div class="result-path" id="rPath"></div>
+          <div class="row">
+            <button class="btn" id="btnReveal">Show in folder</button>
+            <a class="btn" id="btnDownload" download>Download</a>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Exact frame modal -->
+  <div class="modal hidden" id="frameModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <b>Exact render (ffmpeg + libass)</b>
+        <span class="muted small" id="frameInfo"></span>
+        <button class="icon-btn" data-close>✕</button>
+      </div>
+      <div class="modal-body"><img id="frameImg" alt="Rendered frame" /></div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
