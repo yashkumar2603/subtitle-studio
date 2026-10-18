@@ -270,6 +270,7 @@ async function loadProject(project, proxyJob) {
   fitStage();
   syncControls();
   renderPresets();
+  syncExportMode();
   renderFontButton();
   await ensureFont(S.style.fontFamily);
   recompute();
@@ -1519,21 +1520,37 @@ function fillEncoders() {
   sel.value = prev && [...sel.options].some((o) => o.value === prev) ? prev : hw ? hw.id : "libx264";
 }
 
+function exportPlaybackSpeed() {
+  return $("#btnCutesy").getAttribute("aria-pressed") === "true" ? +$("#ePlaybackSpeed").value : 1;
+}
+
 function syncExportMode() {
   for (const b of $$("[data-export-radio] button")) b.classList.toggle("active", b.dataset.value === S.exportMode);
   const burn = S.exportMode === "burn";
+  const playbackSpeed = exportPlaybackSpeed();
+  const cutesy = $("#btnCutesy").getAttribute("aria-pressed") === "true";
+  $("#btnCutesy").classList.toggle("primary", cutesy);
+  $("#ePlaybackOptions").classList.toggle("hidden", !cutesy);
+  $("#ePlaybackSpeedValue").textContent = `${(+$("#ePlaybackSpeed").value).toFixed(2)}×`;
+  $("#ePlaybackHint").textContent = playbackSpeed !== 1 && S.project
+    ? `Export: ${fmtTime(S.project.info.duration / playbackSpeed, false)} at ${playbackSpeed.toFixed(2)}×. Voice pitch rises with speed. Editor stays at 1×; subtitle files use export timing.`
+    : "Export only. Editor playback stays at normal speed.";
   $$(".burn-only").forEach((el) => el.classList.toggle("hidden", !burn));
+  $$(".encode-only").forEach((el) => el.classList.toggle("hidden", !burn && playbackSpeed === 1));
+  const videoHint = playbackSpeed === 1 ? "Video is copied; audio is mixed if changed." : "Video is re-encoded at the selected speed.";
   $("#modeHint").textContent = burn
     ? "Subtitles become part of the picture with your exact style. Works everywhere (Instagram, WhatsApp, TVs)."
     : $("#eContainer").value === "mkv"
-      ? "Video is copied; audio is mixed if changed. MKV keeps your styling (VLC, mpv). Viewers can switch subtitles off."
-      : "Video is copied; audio is mixed if changed. MP4 subtitle tracks are plain text: players use their own style.";
+      ? `${videoHint} MKV keeps your styling (VLC, mpv). Viewers can switch subtitles off.`
+      : `${videoHint} MP4 subtitle tracks are plain text: players use their own style.`;
 }
 
 async function exportSubs(fmt) {
   if (!S.cues.length && fmt !== "txt") return toast("No subtitles to export yet.", "error");
   try {
-    const res = await api(`/api/project/${S.project.id}/subtitles`, { json: { format: fmt, cues: cuesForServer(), style: S.style } });
+    const res = await api(`/api/project/${S.project.id}/subtitles`, { json: {
+      format: fmt, cues: cuesForServer(), style: S.style, playbackSpeed: exportPlaybackSpeed(),
+    } });
     download(await res.blob(), `${S.project.name}.${fmt}`);
   } catch (e) {
     toast("Export failed: " + e.message, "error");
@@ -1543,11 +1560,13 @@ async function exportSubs(fmt) {
 let rJobId = null;
 async function startRender(test = false) {
   if (musicImportBusy) return toast("Wait for the music import to finish.", "error");
-  if (!S.cues.length && !S.music.enabled && S.music.videoVolume === 100) return toast("No subtitles or audio changes yet.", "error");
+  if (!S.cues.length && !S.music.enabled && S.music.videoVolume === 100 && exportPlaybackSpeed() === 1) return toast("No subtitles or audio changes yet.", "error");
   const body = {
     cues: cuesForServer(),
     style: S.style,
     music: S.music,
+    playbackSpeed: exportPlaybackSpeed(),
+    speedMusic: $("#eSpeedMusic").checked,
     mode: S.exportMode,
     container: $("#eContainer").value,
     encoder: $("#eEncoder").value,
@@ -1829,6 +1848,12 @@ function bindStatic() {
     scheduleSave();
   });
   // export
+  $("#btnCutesy").onclick = () => {
+    const button = $("#btnCutesy");
+    button.setAttribute("aria-pressed", button.getAttribute("aria-pressed") === "true" ? "false" : "true");
+    syncExportMode();
+  };
+  $("#ePlaybackSpeed").addEventListener("input", syncExportMode);
   $$("[data-export]").forEach((b) => (b.onclick = () => exportSubs(b.dataset.export)));
   for (const b of $$("[data-export-radio] button")) {
     b.onclick = () => {

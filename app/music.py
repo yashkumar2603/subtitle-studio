@@ -121,22 +121,27 @@ def value_at(points: list[tuple[float, float]], time: float) -> float:
 
 def render_args(settings: MusicSettings, track: Path | None, cues: list, duration: float,
                 start: float, total: float, has_audio: bool, input_index: int,
-                workdir: Path, track_duration: float = 0) -> tuple[list[str], list[str]]:
+                workdir: Path, track_duration: float = 0, playback_speed: float = 1,
+                speed_music: bool = False) -> tuple[list[str], list[str]]:
     """Extra inputs and output options. Leave untouched audio as stream copy."""
     use_music = settings.enabled and track is not None
-    if not use_music and settings.videoVolume == 100:
+    if not use_music and settings.videoVolume == 100 and playback_speed == 1:
         return [], ["-map", "0:a?", "-c:a", "copy"]
     inputs, filters, outputs = [], [], []
     if has_audio:
-        filters.append(f"[0:a:0]volume={settings.videoVolume / 100:.8f}[original]")
+        speed_filter = media.pitched_speed_filter(playback_speed) + "," if playback_speed != 1 else ""
+        filters.append(f"[0:a:0]{speed_filter}"
+                       f"volume={settings.videoVolume / 100:.8f}[original]")
         outputs.append("[original]")
     if use_music:
-        offset = start % track_duration if track_duration > 0 else start
+        music_start = start if speed_music else start / playback_speed
+        offset = music_start % track_duration if track_duration > 0 else music_start
         inputs = ["-stream_loop", "-1", "-ss", f"{offset:.6f}", "-i", str(track)]
         points = envelope(cues, duration)
         points = [(0.0, value_at(points, start)),
                   *((t - start, v) for t, v in points if start < t < start + total),
                   (total, value_at(points, start + total))]
+        points = [(t / playback_speed, amount) for t, amount in points]
         commands = []
         for (t, a), (end, b) in zip(points, points[1:]):
             if end - t < 0.000001:
@@ -147,7 +152,8 @@ def render_args(settings: MusicSettings, track: Path | None, cues: list, duratio
             commands.append(f"{t:.6f} volume@music volume '{expr}';")
         (workdir / "music-volume.txt").write_text("\n".join(commands), "utf-8")
         initial = (settings.noVoiceVolume + (settings.voiceVolume - settings.noVoiceVolume) * points[0][1]) / 100
-        filters.append(f"[{input_index}:a:0]asetpts=PTS-STARTPTS,asendcmd=f=music-volume.txt,"
+        speed_filter = media.pitched_speed_filter(playback_speed) + "," if speed_music and playback_speed != 1 else ""
+        filters.append(f"[{input_index}:a:0]asetpts=PTS-STARTPTS,{speed_filter}asendcmd=f=music-volume.txt,"
                        f"volume@music={initial:.8f}:eval=frame[music]")
         outputs.append("[music]")
     if not outputs:
@@ -161,4 +167,4 @@ def render_args(settings: MusicSettings, track: Path | None, cues: list, duratio
     filters.append(f"{output}alimiter=limit=0.95:level=0:latency=1[audio]")
     (workdir / "music-filter.txt").write_text(";\n".join(filters), "utf-8")
     return inputs, ["-filter_complex_script", "music-filter.txt", "-map", "[audio]",
-                    "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.6f}"]
+                    "-c:a", "aac", "-b:a", "192k", "-t", f"{total / playback_speed:.6f}"]

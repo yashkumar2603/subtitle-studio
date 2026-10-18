@@ -205,7 +205,8 @@ def letter_timeline(cue: dict, st: dict) -> list[list[tuple[str, float, float]]]
 # ---------------------------------------------------------------- ASS
 
 
-def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str = "Subtitles") -> str:
+def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str = "Subtitles",
+              time_scale: float = 1) -> str:
     st = merged_style(style)
     prx, pry = play_res(width, height)
     font = str(st["fontFamily"]).replace(",", " ")
@@ -301,13 +302,13 @@ def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str
     events: list[str] = []
 
     def emit(start: float, end: float, body: str, fin: int, fout: int, prefix: str):
-        fade = f"\\fad({fin},{fout})" if (fin or fout) else ""
+        fade = f"\\fad({round(fin * time_scale)},{round(fout * time_scale)})" if (fin or fout) else ""
 
         def event(layer: int, style_name: str, layer_blur: float) -> str:
             b = f"\\blur{layer_blur:g}" if layer_blur > 0 else ""
             tags = prefix + b + fade
             text = (f"{{{tags}}}" if tags else "") + body.replace("\x00", b).replace("\x01", show[style_name])
-            return f"Dialogue: {layer},{ass_time(start)},{ass_time(end)},{style_name},,0,0,0,,{text}"
+            return f"Dialogue: {layer},{ass_time(start * time_scale)},{ass_time(end * time_scale)},{style_name},,0,0,0,,{text}"
 
         if st["boxEnabled"]:
             events.append(event(0, "Box", blur))
@@ -334,10 +335,10 @@ def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str
                     # Each letter sets its full state: tags carry over to the next letter.
                     tags = "\x01"
                     if shown_at > a + 1e-6:
-                        t = round((shown_at - a) * 1000)
+                        t = round((shown_at - a) * 1000 * time_scale)
                         tags = hide + (f"\\t({t},{t + 1},\x01)" if shown_at < b else "")
                     if hidden_at < b - 1e-6:
-                        t = round((hidden_at - a) * 1000)
+                        t = round((hidden_at - a) * 1000 * time_scale)
                         tags += f"\\t({t},{t + 1},{hide})"
                 out.append(f"{{{tags}}}{_ass_escape(g)}")
             return "".join(out)
@@ -378,8 +379,8 @@ def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str
                     lead = ws - cursor
                     dur = max(0.0, min(nxt, cue["end"]) - ws)
                     t = word_text(k, word.get("t", ""), cue["start"], cue["end"])
-                    lead_tag = f"{{\\k{round(lead * 100)}}}" if lead >= 0.01 else ""
-                    parts.append(f"{lead_tag}{{\\kf{max(1, round(dur * 100))}}}{t}")
+                    lead_tag = f"{{\\k{round(lead * 100 * time_scale)}}}" if lead >= 0.01 else ""
+                    parts.append(f"{lead_tag}{{\\kf{max(1, round(dur * 100 * time_scale))}}}{t}")
                     cursor = ws + dur
                     k += 1
                 parts_lines.append(_join_parts([w.get("t", "") for w in line], parts))
@@ -403,17 +404,17 @@ def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str
 # ---------------------------------------------------------------- plain formats
 
 
-def build_srt(cues: list[dict]) -> str:
+def build_srt(cues: list[dict], time_scale: float = 1) -> str:
     out = []
     for i, c in enumerate(_valid_cues(cues), 1):
-        out.append(f"{i}\n{srt_time(c['start'])} --> {srt_time(c['end'])}\n{_cue_text(c)}\n")
+        out.append(f"{i}\n{srt_time(c['start'] * time_scale)} --> {srt_time(c['end'] * time_scale)}\n{_cue_text(c)}\n")
     return "\n".join(out)
 
 
-def build_vtt(cues: list[dict]) -> str:
+def build_vtt(cues: list[dict], time_scale: float = 1) -> str:
     out = ["WEBVTT", ""]
     for c in _valid_cues(cues):
-        out.append(f"{srt_time(c['start'], '.')} --> {srt_time(c['end'], '.')}\n{_cue_text(c)}\n")
+        out.append(f"{srt_time(c['start'] * time_scale, '.')} --> {srt_time(c['end'] * time_scale, '.')}\n{_cue_text(c)}\n")
     return "\n".join(out)
 
 

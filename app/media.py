@@ -14,12 +14,25 @@ from collections import deque
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import BaseModel, Field
+
 from . import procs
 from .jobs import Job
 
 BROWSER_VIDEO = {"h264", "vp8", "vp9", "av1"}
 BROWSER_AUDIO = {"aac", "mp3", "opus", "vorbis", "flac", None}
 MP4_AUDIO = {"aac", "mp3", "ac3", "eac3", "alac", "opus"}
+
+
+class PlaybackSettings(BaseModel):
+    playbackSpeed: float = Field(default=1, ge=1, le=3, allow_inf_nan=False)
+    speedMusic: bool = False
+
+
+def pitched_speed_filter(rate: float) -> str:
+    """Play samples faster: pitch/formants rise together, like a sped-up record."""
+    return f"aresample=48000,asetrate={48000 * rate:.6f},aresample=48000"
+
 
 @lru_cache(maxsize=1)
 def ffmpeg_exe() -> str:

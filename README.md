@@ -46,6 +46,10 @@ Works on **Windows**, **Linux** and **macOS**. Uses an NVIDIA GPU when one is pr
   speed and resolution options), a 10-second **test render** from the playhead, soft subtitle tracks
   (MP4 text track, or MKV with full ASS styling and embedded fonts — video is copied), and SRT / VTT /
   styled ASS / plain-text transcript files.
+- **Cutesy speed-up**: toggle it in Export, then set 1.00×–3.00× in 0.01× steps. Voice speeds up
+  and rises in pitch together. Added music stays at normal speed/pitch unless **Speed up added
+  music too** is checked (off by default). Subtitle timings, word effects and music ducking follow
+  the faster video. The editor stays at 1×; exported subtitle files use the selected export speed.
 - Videos the browser can't play (e.g. HEVC from iPhones) get an automatic 720p preview proxy;
   the final render always uses the original file.
 
@@ -88,6 +92,12 @@ uv run python -m app    # options: --port 7860  --no-browser  --host 127.0.0.1
    These settings autosave with the project. With no subtitles, music stays at the no-voice volume.
 7. **Export**: try **Test 10 s** first, then **Render video**. The file is saved next to the
    original video, e.g. `My video (subtitled).mp4`.
+
+For a faster, higher-pitched voice, enable **Cutesy speed-up** in Export (starts at 1.25×), then
+adjust the speed slider. This intentionally raises pitch rather than preserving the original
+voice. Any music already inside the source video speeds up with the voice; the music checkbox
+controls only a soundtrack added through the Music tab. Speed-up re-encodes video even for soft
+subtitles; resolution, quality and encoding controls become available in that mode too.
 
 Music files are copied into the project's data folder as AAC so moving the original audio file
 doesn't break the soundtrack. YouTube imports use [yt-dlp](https://github.com/yt-dlp/yt-dlp)

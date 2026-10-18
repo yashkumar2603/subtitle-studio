@@ -423,6 +423,16 @@
         </div>
 
         <h4>Video</h4>
+        <button class="btn" id="btnCutesy" type="button" aria-pressed="false" aria-controls="ePlaybackOptions">Cutesy speed-up</button>
+        <div id="ePlaybackOptions" class="hidden">
+          <div class="field">
+            <label for="ePlaybackSpeed">Playback speed <output id="ePlaybackSpeedValue">1.25×</output></label>
+            <input id="ePlaybackSpeed" type="range" min="1" max="3" step="0.01" value="1.25" />
+          </div>
+          <label class="check"><input type="checkbox" id="eSpeedMusic" /> Speed up added music too</label>
+          <div class="hint">Voice gets faster and higher-pitched. Unchecked: music added in the Music tab keeps its normal speed and pitch. Audio already inside the video speeds up together.</div>
+        </div>
+        <div class="hint" id="ePlaybackHint">Export only. Editor playback stays at normal speed.</div>
         <div class="field">
           <div class="seg-ctl" data-export-radio="mode">
             <button data-value="burn">Burn in (always visible)</button>
@@ -438,7 +448,7 @@
               <option value="mkv">MKV</option>
             </select>
           </div>
-          <div class="field burn-only">
+          <div class="field encode-only">
             <label>Resolution</label>
             <select id="eHeight">
               <option value="0">Original</option>
@@ -447,7 +457,7 @@
               <option value="480">480p</option>
             </select>
           </div>
-          <div class="field burn-only">
+          <div class="field encode-only">
             <label>Quality</label>
             <select id="eQuality">
               <option value="18">High</option>
@@ -455,8 +465,8 @@
               <option value="27">Small file</option>
             </select>
           </div>
-          <div class="field burn-only">
-            <label>Speed</label>
+          <div class="field encode-only">
+            <label>Encoding speed</label>
             <select id="eSpeed">
               <option value="fast">Fast</option>
               <option value="medium" selected>Medium</option>
@@ -464,7 +474,7 @@
             </select>
           </div>
         </div>
-        <div class="field burn-only">
+        <div class="field encode-only">
           <label>Encoder</label>
           <select id="eEncoder"></select>
         </div>
@@ -474,7 +484,7 @@
         </div>
         <div class="row">
           <button class="btn primary grow" id="btnRender">Render video</button>
-          <button class="btn burn-only" id="btnTestRender" title="Render 10 seconds from the playhead to check the look">Test 10 s</button>
+          <button class="btn burn-only" id="btnTestRender" title="Render the next 10 source seconds with your selected export speed">Test 10 s</button>
         </div>
         <button class="btn danger hidden" id="btnCancelR">Cancel</button>
         <div class="job hidden" id="rJob"><div class="bar"><i></i></div><div class="job-msg"></div></div>

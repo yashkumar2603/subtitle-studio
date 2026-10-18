@@ -102,11 +102,11 @@ def _output_dir(project: dict, requested: str | None) -> Path:
     return DATA / "outputs"
 
 
-def _prepare_workdir(workdir: Path, project: dict, cues: list, style: dict) -> Path:
+def _prepare_workdir(workdir: Path, project: dict, cues: list, style: dict, time_scale: float = 1) -> Path:
     workdir.mkdir(parents=True, exist_ok=True)
     w, h = project["info"]["width"], project["info"]["height"]
     st = subs.merged_style(style)
-    (workdir / "subs.ass").write_text(subs.build_ass(cues, st, w, h, project["name"]), "utf-8")
+    (workdir / "subs.ass").write_text(subs.build_ass(cues, st, w, h, project["name"], time_scale), "utf-8")
     fdir = workdir / "fonts"
     if fdir.exists():
         shutil.rmtree(fdir, ignore_errors=True)
@@ -422,14 +422,18 @@ def subtitle_file(pid: str, body: dict = Body(...)):
     fmt = body.get("format", "srt")
     cues = body.get("cues") or []
     name = project["name"]
+    try:
+        time_scale = 1 / media.PlaybackSettings.model_validate(body).playbackSpeed
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if fmt == "ass":
-        text = subs.build_ass(cues, body.get("style") or {}, project["info"]["width"], project["info"]["height"], name)
+        text = subs.build_ass(cues, body.get("style") or {}, project["info"]["width"], project["info"]["height"], name, time_scale)
     elif fmt == "vtt":
-        text = subs.build_vtt(cues)
+        text = subs.build_vtt(cues, time_scale)
     elif fmt == "txt":
         text = subs.build_txt(project.get("segments") or [])
     else:
-        fmt, text = "srt", subs.build_srt(cues)
+        fmt, text = "srt", subs.build_srt(cues, time_scale)
     mime = {"vtt": "text/vtt", "ass": "text/x-ssa"}.get(fmt, "text/plain")
     return Response(
         text.encode("utf-8"),
@@ -473,6 +477,7 @@ def render(pid: str, body: dict = Body(...)):
     src = project["videoPath"]
     try:
         audio_settings = music.MusicSettings.model_validate(body.get("music") or project.get("music") or {})
+        playback = media.PlaybackSettings.model_validate(body)
     except ValueError as e:
         raise HTTPException(400, str(e))
     track_info = project.get("musicTrack") or {}
@@ -485,22 +490,32 @@ def render(pid: str, body: dict = Body(...)):
         total = min(max(0.5, float(clip.get("duration") or 10)), total - start)
     else:
         clip = None
+    output_duration = total / playback.playbackSpeed
     out_dir = _output_dir(project, body.get("outputDir"))
-    suffix = (" (subtitled)" if mode == "burn" else " (soft subs)") if cues else " (music)"
+    suffix = (" (subtitled)" if mode == "burn" else " (soft subs)") if cues else " (edited)"
+    if playback.playbackSpeed != 1:
+        suffix += f" {playback.playbackSpeed:g}x"
     if clip:
         suffix += " test"
     out = _unique(out_dir / f"{project['name']}{suffix}.{container}")
 
     def work(job: Job):
         job.cleanup_paths = [out, store.dir(pid) / f"render-{job.id}"]
-        workdir = _prepare_workdir(store.dir(pid) / f"render-{job.id}", project, cues, style)
+        # Burned text runs on source time before the picture is sped up. Soft
+        # subtitles instead serialize all event/animation times on output time.
+        workdir = _prepare_workdir(store.dir(pid) / f"render-{job.id}", project, cues, style,
+                                  1 / playback.playbackSpeed if mode == "soft" else 1)
         lang = LANG3.get(project.get("language") or "", "und")
         try:
             audio_inputs, audio_args = music.render_args(
                 audio_settings, track, cues, info["duration"], start, total,
                 info.get("hasAudio", False), 2 if mode == "soft" and cues else 1, workdir,
-                track_info.get("duration", 0),
+                track_info.get("duration", 0), playback.playbackSpeed, playback.speedMusic,
             )
+            # "720p" means the short side, so portrait videos scale correctly too.
+            scale_filters = []
+            if height and height < min(info["width"], info["height"]):
+                scale_filters.append(f"scale={height}:-2" if info["width"] < info["height"] else f"scale=-2:{height}")
             if container == "mp4" and info.get("acodec") not in media.MP4_AUDIO and audio_args[-1] == "copy":
                 audio_args[-1] = "aac"
                 audio_args += ["-b:a", "192k"]
@@ -508,10 +523,17 @@ def render(pid: str, body: dict = Body(...)):
                 if container == "mkv":
                     sub_in, sub_codec = "subs.ass", "ass"
                 else:
-                    (workdir / "subs.srt").write_text(subs.build_srt(cues), "utf-8")
+                    (workdir / "subs.srt").write_text(subs.build_srt(cues, 1 / playback.playbackSpeed), "utf-8")
                     sub_in, sub_codec = "subs.srt", "mov_text"
                 args = ["-y", "-i", src, *(["-i", sub_in] if cues else []), *audio_inputs,
-                        "-map", "0:v:0", *audio_args, "-c:v", "copy"]
+                        "-map", "0:v:0", *audio_args]
+                if playback.playbackSpeed == 1:
+                    args += ["-c:v", "copy"]
+                else:
+                    vf = [*scale_filters, f"setpts=PTS/{playback.playbackSpeed:.8f}"]
+                    args += ["-vf", ",".join(vf), *media.video_codec_args(encoder, quality, speed),
+                             "-pix_fmt", "yuv420p", "-r", str(info["fps"]), "-fps_mode", "cfr",
+                             "-t", f"{output_duration:.6f}"]
                 if cues:
                     args += ["-map", "1:0", "-c:s", sub_codec,
                              "-metadata:s:s:0", f"language={lang}", "-disposition:s:0", "default"]
@@ -521,27 +543,29 @@ def render(pid: str, body: dict = Body(...)):
                         args += ["-attach", str(f), f"-metadata:s:t:{i}", f"mimetype={mt}"]
                 args += ["-movflags", "+faststart"] if container == "mp4" else []
                 args.append(str(out))
-                media.run_ffmpeg(args, job, info["duration"], cwd=workdir, label="Muxing subtitles")
+                media.run_ffmpeg(args, job, output_duration, cwd=workdir,
+                                 label="Rendering sped-up video" if playback.playbackSpeed != 1 else "Muxing subtitles")
             else:
-                vf = []
-                # "720p" means the short side, so portrait videos scale correctly too.
-                if height and height < min(info["width"], info["height"]):
-                    vf.append(f"scale={height}:-2" if info["width"] < info["height"] else f"scale=-2:{height}")
+                vf = scale_filters
                 pre = []
                 if clip:
                     pre = ["-ss", f"{start:.3f}", "-t", f"{total:.3f}"]
                     vf = [f"setpts=PTS+{start:.3f}/TB"] + vf + [media.subtitles_filter(), "setpts=PTS-STARTPTS"]
                 else:
                     vf.append(media.subtitles_filter())
+                if playback.playbackSpeed != 1:
+                    vf.append(f"setpts=PTS/{playback.playbackSpeed:.8f}")
                 args = ["-y", *pre, "-i", src, *audio_inputs, "-vf", ",".join(vf), "-map", "0:v:0", *audio_args,
                         *media.video_codec_args(encoder, quality, speed), "-pix_fmt", "yuv420p"]
-                if clip:
+                if playback.playbackSpeed != 1:
+                    args += ["-r", str(info["fps"]), "-fps_mode", "cfr", "-t", f"{output_duration:.6f}"]
+                elif clip:
                     # setpts shifts drop the stream frame rate; keep source timestamps (else 25 fps).
                     args += ["-fps_mode", "passthrough"]
                 if container == "mp4":
                     args += ["-movflags", "+faststart"]
                 args.append(str(out))
-                media.run_ffmpeg(args, job, total, cwd=workdir, label="Burning subtitles")
+                media.run_ffmpeg(args, job, output_duration, cwd=workdir, label="Burning subtitles")
         except BaseException:
             out.unlink(missing_ok=True)
             raise
