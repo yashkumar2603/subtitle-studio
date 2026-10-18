@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildCues, retimeWords, joinWords, tokenize } from "../app/static/layout.js";
+import { buildCues, retimeWords, joinWords, tokenize, graphemes, letterTimeline } from "../app/static/layout.js";
 
 const words = (text, start = 0, step = 0.3) =>
   text.split(" ").map((t, i) => ({ t, s: start + i * step, e: start + i * step + step * 0.9 }));
@@ -56,4 +56,35 @@ test("retime keeps timings when word count matches", () => {
 
 test("tokenize splits CJK per character", () => {
   assert.deepEqual(tokenize("你好 world"), ["你", "好", "world"]);
+});
+
+const twCue = {
+  start: 1, end: 3,
+  lines: [[{ t: "Hi", s: 1, e: 1.2 }, { t: "you", s: 1.5, e: 1.8 }]],
+};
+
+test("graphemes keep Indic conjuncts and marks together", () => {
+  assert.deepEqual(graphemes("hey"), ["h", "e", "y"]);
+  assert.deepEqual(graphemes("क्षमा"), ["क्ष", "मा"]);
+});
+
+test("typewriter types letters across each spoken word", () => {
+  const tl = letterTimeline(twCue, { highlightMode: "typewriter" });
+  assert.deepEqual(tl[0].map((l) => +l.show.toFixed(3)), [1, 1.1]);
+  assert.deepEqual(tl[1].map((l) => +l.show.toFixed(3)), [1.5, 1.6, 1.7]);
+  assert.ok(tl.flat().every((l) => l.hide === 3));
+});
+
+test("erase hides letters left to right inside the last eraseMs", () => {
+  const tl = letterTimeline(twCue, { highlightMode: "none", eraseOut: true, eraseMs: 500 }).flat();
+  assert.ok(tl.every((l) => l.show === 1));
+  assert.equal(+tl[0].hide.toFixed(3), 2.6);
+  assert.equal(tl.at(-1).hide, 3);
+  for (let i = 1; i < tl.length; i++) assert.ok(tl[i].hide > tl[i - 1].hide);
+});
+
+test("per-line placement is carried from segment to cue", () => {
+  const seg = { start: 0, end: 1, text: "a b", words: [{ t: "a", s: 0, e: 0.4 }, { t: "b", s: 0.5, e: 0.9 }], place: { alignment: 8 } };
+  const cues = buildCues([seg], {}, (s) => s.length, 100);
+  assert.deepEqual(cues[0].place, { alignment: 8 });
 });

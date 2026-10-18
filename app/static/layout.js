@@ -141,6 +141,7 @@ export function buildCues(segments, layout, measure, limit) {
       lines: lines.map((l) => l.map((w) => ({ t: w.t, s: w.s, e: w.e }))),
       seg: seg.__i,
       low: !!seg.lowConf,
+      ...(seg.place ? { place: { ...seg.place } } : {}),
     });
   };
 
@@ -201,4 +202,55 @@ export function rescaleWords(words, oldStart, oldEnd, start, end) {
     s: round3(start + (w.s - oldStart) * k),
     e: round3(start + (w.e - oldStart) * k),
   }));
+}
+
+// ---------------------------------------------------------------- letter animation
+// Typewriter (letters appear while the word is spoken) and "erase letter by
+// letter" share one timeline. app/subs.py mirrors this so the render matches.
+
+const MAX_LETTER_SEC = 0.1; // a held word still types at a readable pace
+const VIRAMA = /[्্੍્୍்్್്්ฺ္្]/;
+const JOINER = /[\p{M}‌‍]/u;
+
+// Split into user-visible letters: marks, joiners and virama conjuncts (क्ष)
+// stay with their base letter so Indic scripts never break apart.
+export function graphemes(text) {
+  const out = [];
+  for (const ch of Array.from(text || "")) {
+    const prev = out.length ? out[out.length - 1] : "";
+    if (prev && (JOINER.test(ch) || VIRAMA.test(prev.slice(-1)) || prev.endsWith("‍"))) out[out.length - 1] += ch;
+    else out.push(ch);
+  }
+  return out;
+}
+
+export function letterAnimated(st) {
+  return st.highlightMode === "typewriter" || !!st.eraseOut;
+}
+
+// For each word, the show/hide time (seconds) of each of its letters.
+export function letterTimeline(cue, st) {
+  const words = cue.lines.flat();
+  const dur = cue.end - cue.start;
+  const erase = st.eraseOut ? Math.min((st.eraseMs ?? 300) / 1000, dur * 0.5) : 0;
+  const eraseStart = cue.end - erase;
+  const total = words.reduce((n, w) => n + graphemes(w.t).length, 0);
+  let j = 0;
+  return words.map((w) => {
+    const letters = graphemes(w.t);
+    const n = letters.length;
+    let s = cue.start;
+    let e = cue.start;
+    if (st.highlightMode === "typewriter" && Number.isFinite(w.s)) {
+      s = Math.min(Math.max(cue.start, w.s), eraseStart);
+      const we = Number.isFinite(w.e) ? w.e : s;
+      e = Math.min(Math.max(we, s), s + n * MAX_LETTER_SEC, eraseStart);
+    }
+    return letters.map((t, i) => {
+      const show = s + ((e - s) * i) / Math.max(1, n);
+      const hide = erase > 0 ? eraseStart + (erase * (j + 1)) / total : cue.end;
+      j++;
+      return { t, show, hide };
+    });
+  });
 }

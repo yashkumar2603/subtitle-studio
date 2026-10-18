@@ -54,6 +54,14 @@ export const BUILTIN_PRESETS = [
     layout: { ...BASE_LAYOUT, maxWords: 6, maxWidthPct: 75 },
   },
   {
+    name: "Typewriter",
+    fonts: SANS,
+    style: { fontSize: 66, bold: true, textColor: "#FFFFFF", outlineColor: "#000000", outlineWidth: 3,
+      shadowDepth: 2, shadowOpacity: 60, alignment: 1, marginV: 120, marginL: 120, highlightMode: "typewriter",
+      eraseOut: true, eraseMs: 300 },
+    layout: { ...BASE_LAYOUT, maxWidthPct: 70 },
+  },
+  {
     name: "Yellow DVD",
     fonts: SANS,
     style: { fontSize: 62, bold: true, textColor: "#FFE135", outlineColor: "#000000", outlineWidth: 3,

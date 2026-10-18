@@ -131,6 +131,40 @@ def test_edge_softness_without_outline_keeps_text_sharp():
     assert ",Shade," not in with_outline and "\\blur10" in with_outline
 
 
+def test_typewriter_and_erase_animate_letters_in_one_event():
+    c = {"start": 1, "end": 3, "lines": [[{"t": "Hi", "s": 1, "e": 1.2}, {"t": "you", "s": 1.5, "e": 1.8}]]}
+    ass = subs.build_ass([c], {"highlightMode": "typewriter", "eraseOut": True, "eraseMs": 500}, 1920, 1080)
+    events = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
+    assert len(events) == 1
+    assert "\\t(100,101," in events[0]          # "i" appears 0.1 s in
+    assert "\\t(1600,1601,\\alpha&HFF&)" in events[0]  # "H" erased first, at 2.6 s
+
+
+def test_letter_timeline_matches_js():
+    import json, subprocess
+    c = {"start": 1, "end": 3, "lines": [[{"t": "क्षमा", "s": 1, "e": 1.4}, {"t": "ok", "s": 1.5, "e": 1.8}]]}
+    st = {"highlightMode": "typewriter", "eraseOut": True, "eraseMs": 400}
+    js = "import {letterTimeline} from './app/static/layout.js';" \
+         f"console.log(JSON.stringify(letterTimeline({json.dumps(c)}, {json.dumps(st)})))"
+    out = json.loads(subprocess.run(["node", "--input-type=module", "-e", js], capture_output=True, text=True, check=True).stdout)
+    py = subs.letter_timeline(c, st)
+    assert [[l["t"] for l in w] for w in out] == [[g for g, _, _ in w] for w in py]
+    for wj, wp in zip(out, py):
+        for lj, (_, show, hide) in zip(wj, wp):
+            assert abs(lj["show"] - show) < 1e-9 and abs(lj["hide"] - hide) < 1e-9
+
+
+def test_per_line_placement_overrides_global():
+    c1 = dict(cue(0, 1, "own spot"), place={"alignment": 8})
+    c2 = dict(cue(2, 3, "dragged"), place={"alignment": 2, "posX": 300, "posY": 400})
+    c3 = cue(4, 5, "default")
+    ass = subs.build_ass([c1, c2, c3], {"posX": 960, "posY": 900}, 1920, 1080)
+    ev = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
+    assert "{\\an8}" in ev[0] and "\\pos" not in ev[0]
+    assert "\\an2\\pos(300,400)" in ev[1]
+    assert "\\an2\\pos(960,900)" in ev[2]
+
+
 def test_interrupted_model_download_is_not_treated_as_cached(tmp_path):
     """A snapshot without model.bin (download cut off by closing the app) must be re-downloaded."""
     import os

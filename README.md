@@ -25,10 +25,12 @@ Works on **Windows**, **Linux** and **macOS**. Uses an NVIDIA GPU when one is pr
 - **Styling**: any font installed on the system (plus your own .ttf/.otf uploads), size, bold,
   italic, ALL CAPS, letter spacing, text/outline/shadow colors and opacity, edge softness (glow),
   background box, fade in/out, 9-point alignment, margins, or **drag the subtitle anywhere** on the video.
-- **12 presets** (Classic, YouTube, Netflix, TikTok Pop, Karaoke, Word Reveal, Yellow DVD,
+  Any single line can get its own position (⌖ in the editor), overriding the global one.
+- **13 presets** (Classic, YouTube, Netflix, TikTok Pop, Karaoke, Word Reveal, Typewriter, Yellow DVD,
   Boxed Yellow, Minimal, Neon, Cinema, Top Caption), plus your own presets that you can save,
   export and import (e.g. share them with friends).
-- **Word effects**: highlight the spoken word (with "pop" scaling), karaoke fill, or reveal word by word.
+- **Word effects**: highlight the spoken word (with "pop" scaling), karaoke fill, reveal word by word,
+  or a letter-by-letter typewriter. Optionally erase each subtitle letter by letter (left to right) as it ends.
 - **Text wrapping**: wrap by screen width (measured with the real font) or by characters,
   max lines, max words per subtitle (TikTok style), start a new subtitle or add lines when text
   doesn't fit, balanced line lengths, new subtitle per sentence, split at pauses, min/max duration,

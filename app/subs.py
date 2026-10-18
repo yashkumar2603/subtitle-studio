@@ -12,6 +12,7 @@ where the shorter video side is 1080, matching the preview overlay.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 DEFAULT_STYLE = {
     "fontFamily": "Arial",
@@ -37,11 +38,13 @@ DEFAULT_STYLE = {
     "marginR": 60,
     "posX": None,
     "posY": None,
-    "highlightMode": "none",  # none | word | fill | reveal
+    "highlightMode": "none",  # none | word | fill | reveal | typewriter
     "highlightColor": "#FFD700",
     "highlightScale": 100,
     "fadeIn": 0,
     "fadeOut": 0,
+    "eraseOut": False,  # letters disappear left to right at the end of each subtitle
+    "eraseMs": 300,
 }
 
 
@@ -154,6 +157,51 @@ def _valid_cues(cues: list[dict]) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- letter animation
+# Mirrors letterTimeline() in app/static/layout.js so the render matches the preview.
+
+MAX_LETTER_SEC = 0.1  # a held word still types at a readable pace
+_VIRAMA = set("्্੍્୍்్್്්ฺ္្")
+
+
+def graphemes(text: str) -> list[str]:
+    """User-visible letters: marks, joiners and virama conjuncts stay with their base."""
+    out: list[str] = []
+    for ch in text or "":
+        joiner = unicodedata.category(ch).startswith("M") or ch in "‌‍"
+        if out and (joiner or out[-1][-1] in _VIRAMA or out[-1].endswith("‍")):
+            out[-1] += ch
+        else:
+            out.append(ch)
+    return out
+
+
+def letter_timeline(cue: dict, st: dict) -> list[list[tuple[str, float, float]]]:
+    """Per word, per letter: (letter, shown at, hidden at) in seconds."""
+    words = _cue_words(cue)
+    start, end = cue["start"], cue["end"]
+    erase = min(_num(st.get("eraseMs"), 300) / 1000, (end - start) * 0.5) if st.get("eraseOut") else 0.0
+    erase_start = end - erase
+    total = sum(len(graphemes(w.get("t", ""))) for w in words)
+    out, j = [], 0
+    for w in words:
+        letters = graphemes(w.get("t", ""))
+        n = len(letters)
+        s = e = start
+        if st.get("highlightMode") == "typewriter" and "s" in w:
+            s = min(max(start, _num(w["s"])), erase_start)
+            we = _num(w["e"], s) if "e" in w else s
+            e = min(max(we, s), s + n * MAX_LETTER_SEC, erase_start)
+        row = []
+        for i, g in enumerate(letters):
+            shown = s + (e - s) * i / max(1, n)
+            hidden = erase_start + erase * (j + 1) / total if erase > 0 else end
+            row.append((g, shown, hidden))
+            j += 1
+        out.append(row)
+    return out
+
+
 # ---------------------------------------------------------------- ASS
 
 
@@ -225,24 +273,40 @@ def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
 
-    prefix = ""
-    if st["posX"] is not None and st["posY"] is not None:
-        prefix += f"\\an{align}\\pos({_num(st['posX']):.0f},{_num(st['posY']):.0f})"
+    def cue_prefix(cue: dict) -> str:
+        # Per-subtitle placement (set in the editor) overrides the global position.
+        place = cue.get("place") or {}
+        a = int(_num(place.get("alignment"))) if place.get("alignment") else 0
+        if place.get("posX") is not None and place.get("posY") is not None:
+            return f"\\an{a or align}\\pos({_num(place['posX']):.0f},{_num(place['posY']):.0f})"
+        if 1 <= a <= 9:
+            return f"\\an{a}"
+        if st["posX"] is not None and st["posY"] is not None:
+            return f"\\an{align}\\pos({_num(st['posX']):.0f},{_num(st['posY']):.0f})"
+        return ""
+
     fade_in, fade_out = int(_num(st["fadeIn"])), int(_num(st["fadeOut"]))
     hl = ass_inline_color(st["highlightColor"])
     scale = _num(st["highlightScale"], 100)
     # \r resets overrides to the event's style; emit() re-applies that layer's blur.
     reset = "{\\r\x00}"
+    # Letter animation (typewriter / erase): "\x01" becomes the layer's visible alphas.
+    animated = mode == "typewriter" or bool(st["eraseOut"])
+    hide = "\\alpha&HFF&"
+    show_main = f"\\1a&H{primary[2:4]}&\\2a&H{secondary[2:4]}&\\3a&H{outline_c[2:4]}&\\4a&H{shadow_c[2:4]}&"
+    show = {"Main": show_main, "Shade": f"\\1a&HFE&\\3a&HFF&\\4a&H{shadow_c[2:4]}&"}
+    if st["boxEnabled"]:
+        show["Box"] = f"\\1a&HFF&\\3a&H{ass_color(st['boxColor'], st['boxOpacity'])[2:4]}&\\4a&HFF&"
 
     events: list[str] = []
 
-    def emit(start: float, end: float, body: str, fin: int, fout: int):
+    def emit(start: float, end: float, body: str, fin: int, fout: int, prefix: str):
         fade = f"\\fad({fin},{fout})" if (fin or fout) else ""
 
         def event(layer: int, style_name: str, layer_blur: float) -> str:
             b = f"\\blur{layer_blur:g}" if layer_blur > 0 else ""
             tags = prefix + b + fade
-            text = (f"{{{tags}}}" if tags else "") + body.replace("\x00", b)
+            text = (f"{{{tags}}}" if tags else "") + body.replace("\x00", b).replace("\x01", show[style_name])
             return f"Dialogue: {layer},{ass_time(start)},{ass_time(end)},{style_name},,0,0,0,,{text}"
 
         if st["boxEnabled"]:
@@ -255,6 +319,29 @@ def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str
         lines = cue.get("lines", [])
         words = _cue_words(cue)
         timed = all("s" in w and "e" in w for w in words) and words
+        prefix = cue_prefix(cue)
+        timeline = letter_timeline(cue, st) if animated else None
+
+        def word_text(k: int, raw: str, a: float, b: float, hidden: bool = False) -> str:
+            """Word ``k`` for an event shown from ``a`` to ``b``; per-letter tags when animated."""
+            if not timeline:
+                return _ass_escape(raw)
+            out = []
+            for g, shown_at, hidden_at in timeline[k]:
+                if hidden or hidden_at <= a + 1e-6:
+                    tags = hide
+                else:
+                    # Each letter sets its full state: tags carry over to the next letter.
+                    tags = "\x01"
+                    if shown_at > a + 1e-6:
+                        t = round((shown_at - a) * 1000)
+                        tags = hide + (f"\\t({t},{t + 1},\x01)" if shown_at < b else "")
+                    if hidden_at < b - 1e-6:
+                        t = round((hidden_at - a) * 1000)
+                        tags += f"\\t({t},{t + 1},{hide})"
+                out.append(f"{{{tags}}}{_ass_escape(g)}")
+            return "".join(out)
+
         if mode in ("word", "reveal") and timed:
             n = len(words)
             for i, w in enumerate(words):
@@ -266,19 +353,19 @@ def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str
                 for line in lines:
                     parts = []
                     for word in line:
-                        t = _ass_escape(word.get("t", ""))
+                        raw = word.get("t", "")
                         if k == i:
                             tag = f"\\1c{hl}"  # newest word: highlight color (word + reveal modes)
                             if scale != 100:
                                 tag += f"\\fscx{scale:g}\\fscy{scale:g}"
-                            parts.append(f"{{{tag}}}{t}{reset}" if tag else t)
+                            parts.append(f"{{{tag}}}{word_text(k, raw, ws, we)}{reset}")
                         elif mode == "reveal" and k > i:
-                            parts.append(f"{{\\alpha&HFF&}}{t}{reset}")
+                            parts.append(f"{{\\alpha&HFF&}}{word_text(k, raw, ws, we, hidden=True)}{reset}")
                         else:
-                            parts.append(t)
+                            parts.append(word_text(k, raw, ws, we))
                         k += 1
                     parts_lines.append(_join_parts([w.get("t", "") for w in line], parts))
-                emit(ws, we, "\\N".join(parts_lines), fade_in if i == 0 else 0, fade_out if i == n - 1 else 0)
+                emit(ws, we, "\\N".join(parts_lines), fade_in if i == 0 else 0, fade_out if i == n - 1 else 0, prefix)
         elif mode == "fill" and timed:
             parts_lines, cursor = [], cue["start"]
             flat = words
@@ -290,16 +377,25 @@ def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str
                     ws = max(cursor, _num(word["s"]))
                     lead = ws - cursor
                     dur = max(0.0, min(nxt, cue["end"]) - ws)
-                    t = _ass_escape(word.get("t", ""))
+                    t = word_text(k, word.get("t", ""), cue["start"], cue["end"])
                     lead_tag = f"{{\\k{round(lead * 100)}}}" if lead >= 0.01 else ""
                     parts.append(f"{lead_tag}{{\\kf{max(1, round(dur * 100))}}}{t}")
                     cursor = ws + dur
                     k += 1
                 parts_lines.append(_join_parts([w.get("t", "") for w in line], parts))
-            emit(cue["start"], cue["end"], "\\N".join(parts_lines), fade_in, fade_out)
+            emit(cue["start"], cue["end"], "\\N".join(parts_lines), fade_in, fade_out, prefix)
+        elif timeline:  # typewriter, or plain text erased letter by letter
+            parts_lines, k = [], 0
+            for line in lines:
+                parts = []
+                for word in line:
+                    parts.append(word_text(k, word.get("t", ""), cue["start"], cue["end"]))
+                    k += 1
+                parts_lines.append(_join_parts([w.get("t", "") for w in line], parts))
+            emit(cue["start"], cue["end"], "\\N".join(parts_lines), fade_in, fade_out, prefix)
         else:
             body = "\\N".join(_ass_escape(join_words(w.get("t", "") for w in line).strip()) for line in lines)
-            emit(cue["start"], cue["end"], body, fade_in, fade_out)
+            emit(cue["start"], cue["end"], body, fade_in, fade_out, prefix)
 
     return "\n".join(head + events) + "\n"
 

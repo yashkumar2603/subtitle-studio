@@ -1,5 +1,6 @@
 import {
   DEFAULT_LAYOUT, buildCues, joinWords, needsSpace, interpolateWords, retimeWords, rescaleWords,
+  letterAnimated, letterTimeline,
 } from "./layout.js";
 import { BUILTIN_PRESETS, SWATCHES } from "./presets.js";
 
@@ -441,7 +442,7 @@ function recompute() {
 }
 
 function cuesForServer() {
-  return S.cues.map((c) => ({ start: c.start, end: c.end, lines: c.lines }));
+  return S.cues.map((c) => ({ start: c.start, end: c.end, lines: c.lines, ...(c.place ? { place: c.place } : {}) }));
 }
 
 // ------------------------------------------------------------------ stage + overlay
@@ -502,6 +503,14 @@ function activeCueIndex(t) {
   return -1;
 }
 
+let timelineCache = { cue: null, key: "", tl: null };
+
+function cueTimeline(cue, st) {
+  const key = `${st.highlightMode}:${st.eraseOut}:${st.eraseMs}`;
+  if (timelineCache.cue !== cue || timelineCache.key !== key) timelineCache = { cue, key, tl: letterTimeline(cue, st) };
+  return timelineCache.tl;
+}
+
 function renderOverlay() {
   if (!S.project || S.dragging) return;
   const t = video.currentTime;
@@ -509,6 +518,12 @@ function renderOverlay() {
   const st = S.style;
   let wordIdx = -1;
   let opacity = 1;
+  let letters = null; // per word, per letter: visible now?
+  let letterKey = "";
+  if (idx >= 0 && letterAnimated(st)) {
+    letters = cueTimeline(S.cues[idx], st).map((w) => w.map((l) => l.show <= t && t < l.hide));
+    letterKey = letters.map((w) => w.map((v) => (v ? 1 : 0)).join("")).join("");
+  }
   if (idx >= 0) {
     const cue = S.cues[idx];
     const words = cue.lines.flat();
@@ -520,11 +535,11 @@ function renderOverlay() {
     if (fout > 0) opacity = Math.min(opacity, (cue.end - t) / fout);
     opacity = clamp(opacity, 0, 1);
   }
-  const key = `${idx}:${st.highlightMode === "none" ? 0 : wordIdx}`;
+  const key = `${idx}:${st.highlightMode === "none" ? 0 : wordIdx}:${letterKey}`;
   if (key !== lastOverlayKey) {
     lastOverlayKey = key;
     layer.innerHTML = "";
-    if (idx >= 0) layer.appendChild(buildCueEl(S.cues[idx], wordIdx));
+    if (idx >= 0) layer.appendChild(buildCueEl(S.cues[idx], wordIdx, letters));
   }
   const el = layer.firstElementChild;
   if (el) (el.querySelector(".sub-cue-wrap, .sub-cue") || el).style.opacity = opacity;
@@ -552,24 +567,24 @@ function textCss(st) {
   };
 }
 
-function buildCueEl(cue, wordIdx) {
+function buildCueEl(cue, wordIdx, letters = null) {
   const st = S.style;
-  if (!st.boxEnabled) return positionCue(buildCueText(cue, wordIdx, "text"));
+  if (!st.boxEnabled) return positionCue(buildCueText(cue, wordIdx, "text", letters), undefined, cue);
   // Like libass: boxes on a layer below all text, so a lower line's box never
   // covers descenders of the line above.
   const stack = document.createElement("div");
   stack.className = "sub-stack";
-  const box = buildCueText(cue, wordIdx, "box");
+  const box = buildCueText(cue, wordIdx, "box", letters);
   box.setAttribute("aria-hidden", "true");
-  const text = buildCueText(cue, wordIdx, "text");
+  const text = buildCueText(cue, wordIdx, "text", letters);
   stack.append(box, text);
   stack.style.alignItems = text.style.alignItems;
-  return positionCue(stack, text);
+  return positionCue(stack, text, cue);
 }
 
-function buildCueText(cue, wordIdx, layerKind) {
+function buildCueText(cue, wordIdx, layerKind, letters = null) {
   const st = S.style;
-  const col = ((st.alignment || 2) - 1) % 3; // 0 left, 1 center, 2 right
+  const col = (placement(cue).alignment - 1) % 3; // 0 left, 1 center, 2 right
   const cueEl = document.createElement("div");
   cueEl.className = "sub-cue";
   Object.assign(cueEl.style, textCss(st));
@@ -594,7 +609,16 @@ function buildCueText(cue, wordIdx, layerKind) {
       if (prev !== null && needsSpace(prev, w.t)) inner.appendChild(document.createTextNode(" "));
       const span = document.createElement("span");
       span.className = "sub-word";
-      span.textContent = w.t;
+      if (letters) {
+        // Typewriter / erase: hidden letters keep their space, like libass \alpha.
+        const tl = cueTimeline(cue, st)[k];
+        tl.forEach((l, i) => {
+          const ls = document.createElement("span");
+          ls.textContent = l.t;
+          if (!letters[k][i]) ls.style.visibility = "hidden";
+          span.appendChild(ls);
+        });
+      } else span.textContent = w.t;
       const mode = layerKind === "box" ? (st.highlightMode === "reveal" ? "reveal" : "none") : st.highlightMode;
       if (layerKind === "box" && (st.highlightMode === "word" || st.highlightMode === "reveal") && k === wordIdx && st.highlightScale !== 100) {
         span.style.fontSize = `${(st.fontSize * fontRatio() * st.highlightScale) / 100}px`;
@@ -620,24 +644,33 @@ function buildCueText(cue, wordIdx, layerKind) {
   return cueEl;
 }
 
-function positionCue(cueEl, textEl = cueEl) {
+// A subtitle's own placement (set in the editor) overrides the global one.
+function placement(cue) {
   const st = S.style;
-  const a = st.alignment || 2;
+  const p = cue?.place;
+  if (p) return { alignment: p.alignment || st.alignment || 2, posX: p.posX ?? null, posY: p.posY ?? null, own: true };
+  return { alignment: st.alignment || 2, posX: st.posX ?? null, posY: st.posY ?? null, own: false };
+}
+
+function positionCue(cueEl, textEl = cueEl, cue = null) {
+  const st = S.style;
+  const pl = placement(cue);
+  const a = pl.alignment;
   const row = a >= 7 ? "top" : a >= 4 ? "mid" : "bot";
   const col = (a - 1) % 3;
   if (cueEl !== textEl) cueEl.classList.add("sub-cue-wrap");
 
-  if (st.posX !== null && st.posX !== undefined && st.posY !== null && st.posY !== undefined) {
+  if (pl.posX !== null && pl.posY !== null) {
     cueEl.classList.add("abs");
-    cueEl.style.left = `${st.posX}px`;
-    cueEl.style.top = `${st.posY}px`;
+    cueEl.style.left = `${pl.posX}px`;
+    cueEl.style.top = `${pl.posY}px`;
     const tx = ["0", "-50%", "-100%"][col];
     const ty = row === "top" ? "0" : row === "mid" ? "-50%" : "-100%";
     cueEl.style.transform = `translate(${tx}, ${ty})`;
     const wrap = document.createElement("div");
     wrap.className = "sub-area";
     wrap.appendChild(cueEl);
-    attachDrag(cueEl, row, col);
+    attachDrag(cueEl, row, col, cue);
     return wrap;
   }
   const area = document.createElement("div");
@@ -647,11 +680,11 @@ function positionCue(cueEl, textEl = cueEl) {
   area.style.justifyContent = row === "top" ? "flex-start" : row === "mid" ? "center" : "flex-end";
   area.style.alignItems = ["flex-start", "center", "flex-end"][col];
   area.appendChild(cueEl);
-  attachDrag(cueEl, row, col);
+  attachDrag(cueEl, row, col, cue);
   return area;
 }
 
-function attachDrag(el, row, col) {
+function attachDrag(el, row, col, cue = null) {
   el.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -691,11 +724,18 @@ function attachDrag(el, row, col) {
       el.classList.remove("dragging");
       S.dragging = false;
       if (moved) {
-        S.style.posX = Math.round(x);
-        S.style.posY = Math.round(y);
-        S.activePreset = null;
-        syncControls();
-        renderPresetsActive();
+        const seg = cue?.place ? S.segments[cue.seg] : null;
+        if (seg) {
+          // This subtitle has its own placement: move only it.
+          seg.place = { ...seg.place, alignment: placement(cue).alignment, posX: Math.round(x), posY: Math.round(y) };
+          recompute();
+        } else {
+          S.style.posX = Math.round(x);
+          S.style.posY = Math.round(y);
+          S.activePreset = null;
+          syncControls();
+          renderPresetsActive();
+        }
         lastOverlayKey = null;
         renderOverlay();
         scheduleSave();
@@ -771,6 +811,7 @@ function renderSegments() {
       </div>
       <div class="seg-actions">
         <button data-act="play" title="Play this line">▶</button>
+        <button data-act="place" class="${seg.place ? "on" : ""}" title="${seg.place ? "Own position (click to change)" : "Position: default (click to set one for this line)"}">⌖</button>
         <button data-act="split" title="Split at the text cursor">✂</button>
         <button data-act="merge" title="Merge with the next line">⤓</button>
         <button data-act="del" title="Delete line">✕</button>
@@ -865,6 +906,8 @@ function bindSegmentList() {
     if (act === "play") {
       video.currentTime = seg.start + 0.01;
       video.play();
+    } else if (act === "place") {
+      openPlacePicker(btn, i);
     } else if (act === "del") {
       pushUndo();
       S.segments.splice(i, 1);
@@ -904,6 +947,49 @@ function bindSegmentList() {
       segmentsChanged();
     }
   });
+}
+
+// Per-line placement: a 3x3 grid like the global one, plus "Default".
+function openPlacePicker(anchor, i) {
+  closePlacePicker();
+  const seg = S.segments[i];
+  const pop = document.createElement("div");
+  pop.id = "placePop";
+  pop.className = "place-pop";
+  const cur = seg.place?.alignment;
+  const custom = seg.place && seg.place.posX != null;
+  pop.innerHTML = `
+    <div class="place-title">Position of this line</div>
+    <div class="align-grid">${[7, 8, 9, 4, 5, 6, 1, 2, 3]
+      .map((a) => `<button data-a="${a}" class="${cur === a && !custom ? "active" : ""}" title="${a}"></button>`)
+      .join("")}</div>
+    <button class="btn small" data-a="0">${seg.place ? "Use default position" : "Default position ✓"}</button>
+    <div class="muted small">${custom ? "Custom spot (dragged). " : ""}After choosing, drag the subtitle on the video to move only this line.</div>`;
+  document.body.appendChild(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = `${Math.min(r.bottom + 4, innerHeight - pop.offsetHeight - 8)}px`;
+  pop.style.left = `${Math.max(8, r.right - pop.offsetWidth)}px`;
+  pop.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-a]");
+    if (!b) return;
+    pushUndo();
+    const a = +b.dataset.a;
+    if (a) seg.place = { alignment: a };
+    else delete seg.place;
+    closePlacePicker();
+    segmentsChanged();
+    video.currentTime = seg.start + 0.01;
+  });
+  setTimeout(() => document.addEventListener("pointerdown", onPlaceOutside), 0);
+}
+
+function onPlaceOutside(e) {
+  if (!e.target.closest("#placePop")) closePlacePicker();
+}
+
+function closePlacePicker() {
+  $("#placePop")?.remove();
+  document.removeEventListener("pointerdown", onPlaceOutside);
 }
 
 function applyFind() {
@@ -1121,7 +1207,7 @@ async function importSubs(file) {
 
 const STYLE_UNITS = {
   fontSize: "", letterSpacing: "", textOpacity: "%", outlineWidth: "", shadowDepth: "", shadowOpacity: "%",
-  blur: "", boxOpacity: "%", boxPadding: "", highlightScale: "%", fadeIn: " ms", fadeOut: " ms", marginV: "", marginL: "", marginR: "",
+  blur: "", boxOpacity: "%", boxPadding: "", highlightScale: "%", fadeIn: " ms", fadeOut: " ms", eraseMs: " ms", marginV: "", marginL: "", marginR: "",
 };
 const LAYOUT_FMT = {
   maxWidthPct: (v) => `${v}%`,
@@ -1164,7 +1250,8 @@ function syncControls() {
   }
   $$("#alignGrid button").forEach((b) => b.classList.toggle("active", +b.dataset.align === +st.alignment));
   $("#boxOpts").classList.toggle("hidden", !st.boxEnabled);
-  $$(".hl-opts").forEach((el) => el.classList.toggle("hidden", st.highlightMode === "none"));
+  $$(".hl-opts").forEach((el) => el.classList.toggle("hidden", st.highlightMode === "none" || st.highlightMode === "typewriter"));
+  $("#eraseOpts").classList.toggle("hidden", !st.eraseOut);
   $("#resetPos").classList.toggle("hidden", st.posX === null || st.posX === undefined);
   for (const sw of $$("[data-swatch]")) {
     $$("button", sw).forEach((b) => (b.style.outline = b.dataset.color.toLowerCase() === String(st[sw.dataset.swatch]).toLowerCase() ? "2px solid var(--accent)" : ""));
