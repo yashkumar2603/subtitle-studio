@@ -250,7 +250,7 @@ def build_ass(cues: list[dict], style: dict, width: int, height: int, title: str
                     for word in line:
                         t = _ass_escape(word.get("t", ""))
                         if k == i:
-                            tag = f"\\1c{hl}" if mode == "word" else ""
+                            tag = f"\\1c{hl}"  # newest word: highlight color (word + reveal modes)
                             if scale != 100:
                                 tag += f"\\fscx{scale:g}\\fscy{scale:g}"
                             parts.append(f"{{{tag}}}{t}{reset}" if tag else t)

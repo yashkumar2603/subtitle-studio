@@ -108,3 +108,12 @@ def test_english_casing():
     segs = [{"words": [{"t": w} for w in "so i'm here. yay".split()]}]
     fix_english_casing(segs)
     assert segs[0]["text"] == "So I'm here. Yay"
+
+
+def test_reveal_colors_newest_word_and_hides_upcoming():
+    ass = subs.build_ass([cue(0, 2, "one two three")], {"highlightMode": "reveal", "highlightColor": "#FF0000"}, 1920, 1080)
+    events = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
+    assert len(events) == 3
+    assert "{\\1c&H0000FF&}two" in events[1]          # newest word in highlight color
+    assert "{\\alpha&HFF&}three" in events[1]         # upcoming word hidden
+    assert events[2].count("\\1c") == 1               # earlier words back to base color

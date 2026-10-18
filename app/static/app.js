@@ -596,7 +596,7 @@ function buildCueText(cue, wordIdx, layerKind) {
       span.className = "sub-word";
       span.textContent = w.t;
       const mode = layerKind === "box" ? (st.highlightMode === "reveal" ? "reveal" : "none") : st.highlightMode;
-      if (layerKind === "box" && st.highlightMode === "word" && k === wordIdx && st.highlightScale !== 100) {
+      if (layerKind === "box" && (st.highlightMode === "word" || st.highlightMode === "reveal") && k === wordIdx && st.highlightScale !== 100) {
         span.style.fontSize = `${(st.fontSize * fontRatio() * st.highlightScale) / 100}px`;
       }
       if (mode === "word" && k === wordIdx) {
@@ -606,8 +606,9 @@ function buildCueText(cue, wordIdx, layerKind) {
         span.style.color = rgba(st.highlightColor, st.textOpacity);
       } else if (mode === "reveal" && k > wordIdx) {
         span.style.visibility = "hidden";
-      } else if (mode === "reveal" && k === wordIdx && st.highlightScale !== 100) {
-        span.style.fontSize = `${(st.fontSize * fontRatio() * st.highlightScale) / 100}px`;
+      } else if (mode === "reveal" && k === wordIdx) {
+        span.style.color = rgba(st.highlightColor, st.textOpacity);
+        if (st.highlightScale !== 100) span.style.fontSize = `${(st.fontSize * fontRatio() * st.highlightScale) / 100}px`;
       }
       inner.appendChild(span);
       prev = w.t;
