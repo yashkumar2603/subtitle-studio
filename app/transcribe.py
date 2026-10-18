@@ -20,6 +20,9 @@ from .subs import join_words
 
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+# The UI shows its own download progress; keep the terminal clean.
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("HF_HUB_VERBOSITY", "error")
 
 MODELS = [
     {"id": "large-v3-turbo", "label": "Large v3 Turbo (recommended)", "size": "1.6 GB"},
@@ -210,15 +213,39 @@ def _repo(model: str) -> str:
     return _MODELS.get(model, model)
 
 
+def cached_model_path(model: str) -> str | None:
+    """Local folder of a fully downloaded model, or None.
+
+    Models live in the Hugging Face cache (``~/.cache/huggingface/hub`` on Linux and
+    macOS, ``%USERPROFILE%\\.cache\\huggingface\\hub`` on Windows; ``HF_HOME`` overrides),
+    so they survive app restarts and app updates and are found offline. A download
+    interrupted by closing the app leaves a snapshot without ``model.bin``; treat that
+    as missing so the next run resumes it instead of failing to load.
+    """
+    from huggingface_hub import snapshot_download
+
+    try:
+        path = snapshot_download(_repo(model), allow_patterns=ALLOW_PATTERNS, local_files_only=True)
+    except Exception:
+        return None
+    p = Path(path)
+    if (p / "model.bin").is_file() and (p / "config.json").is_file():
+        return path
+    return None
+
+
+def models_status() -> list[dict]:
+    return [dict(m, downloaded=cached_model_path(m["id"]) is not None) for m in MODELS]
+
+
 def _ensure_downloaded(model: str, job: Job) -> str:
     """Download model files (with byte progress) and return the local folder."""
     from huggingface_hub import HfApi, constants, snapshot_download
 
     repo = _repo(model)
-    try:
-        return snapshot_download(repo, allow_patterns=ALLOW_PATTERNS, local_files_only=True)
-    except Exception:
-        pass
+    cached = cached_model_path(model)
+    if cached:
+        return cached
 
     job.update(-1, f"Downloading model {model} (first time only)…")
     total = 0

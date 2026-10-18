@@ -26,6 +26,8 @@ class Job:
         self.created = time.time()
         self._cancel = threading.Event()
         self.on_cancel: Callable[[], None] | None = None
+        # Files/folders to delete if the app exits while this job is unfinished.
+        self.cleanup_paths: list = []
 
     def update(self, progress: float | None = None, message: str | None = None):
         if progress is not None:

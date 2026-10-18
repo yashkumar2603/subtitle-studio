@@ -15,7 +15,7 @@ from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import media, subs, transcribe
+from . import media, procs, subs, transcribe
 from .fonts import FontLibrary
 from .jobs import Job, JobManager
 from .projects import ProjectStore
@@ -126,7 +126,7 @@ def system():
         "cuda": _system.get("cuda"),
         "gpuName": _system.get("gpuName"),
         "encoders": _system.get("encoders") or [{"id": "libx264", "label": "CPU (x264)"}],
-        "models": transcribe.MODELS,
+        "models": transcribe.models_status(),
         "languages": sorted(_LANGUAGE_CODES),
         "dataDir": str(DATA),
         "defaultStyle": subs.DEFAULT_STYLE,
@@ -195,6 +195,7 @@ def _maybe_proxy(project: dict) -> str | None:
 
     def work(job: Job):
         tmp = dest.with_suffix(".tmp.mp4")
+        job.cleanup_paths = [tmp]
         media.make_proxy(project["videoPath"], tmp, project["info"], job)
         os.replace(tmp, dest)
         store.update(project["id"], proxyReady=True)
@@ -381,6 +382,7 @@ def render(pid: str, body: dict = Body(...)):
     out = _unique(out_dir / f"{project['name']}{suffix}.{container}")
 
     def work(job: Job):
+        job.cleanup_paths = [out, store.dir(pid) / f"render-{job.id}"]
         workdir = _prepare_workdir(store.dir(pid) / f"render-{job.id}", project, cues, style)
         lang = LANG3.get(project.get("language") or "", "und")
         try:
@@ -458,6 +460,29 @@ def reveal(body: dict = Body(...)):
     except Exception as e:
         raise HTTPException(500, f"Could not open folder: {e}")
     return {"ok": True}
+
+
+def shutdown() -> None:
+    """Stop everything immediately: cancel jobs and kill ffmpeg children.
+
+    Project files are written atomically on every save, so exiting mid-session
+    cannot corrupt them. Process exit releases RAM and GPU memory held by the model.
+    """
+    active = jobs.active()
+    for job in active:
+        try:
+            job.cancel()
+        except Exception:
+            pass
+    procs.kill_all()
+    # The process exits right after this, possibly before cancelled jobs clean up.
+    for job in active:
+        for path in job.cleanup_paths:
+            p = Path(path)
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                p.unlink(missing_ok=True)
 
 
 @app.exception_handler(Exception)

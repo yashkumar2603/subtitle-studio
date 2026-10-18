@@ -14,14 +14,12 @@ from collections import deque
 from functools import lru_cache
 from pathlib import Path
 
+from . import procs
 from .jobs import Job
 
 BROWSER_VIDEO = {"h264", "vp8", "vp9", "av1"}
 BROWSER_AUDIO = {"aac", "mp3", "opus", "vorbis", "flac", None}
 MP4_AUDIO = {"aac", "mp3", "ac3", "eac3", "alac", "opus"}
-
-_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
-
 
 @lru_cache(maxsize=1)
 def ffmpeg_exe() -> str:
@@ -34,13 +32,11 @@ def ffmpeg_exe() -> str:
 
 
 def _run(args: list[str], **kw) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [ffmpeg_exe(), "-hide_banner", *args],
-        capture_output=True,
+    return procs.run(
+        [ffmpeg_exe(), "-hide_banner", "-nostdin", *args],
         text=True,
         encoding="utf-8",
         errors="replace",
-        creationflags=_NO_WINDOW,
         **kw,
     )
 
@@ -131,15 +127,15 @@ def video_codec_args(encoder: str, quality: int, speed: str = "medium") -> list[
 def run_ffmpeg(args: list[str], job: Job | None, duration: float, cwd: str | Path | None = None,
                progress_span: tuple[float, float] = (0.0, 1.0), label: str = "Rendering") -> None:
     cmd = [ffmpeg_exe(), "-hide_banner", "-nostdin", "-progress", "pipe:1", "-nostats", *args]
-    proc = subprocess.Popen(
+    proc = procs.popen(
         cmd,
         cwd=str(cwd) if cwd else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
         text=True,
         encoding="utf-8",
         errors="replace",
-        creationflags=_NO_WINDOW,
     )
     if job:
         job.on_cancel = proc.kill
@@ -167,6 +163,7 @@ def run_ffmpeg(args: list[str], job: Job | None, duration: float, cwd: str | Pat
         if job.cancelled:
             proc.kill()
     proc.wait()
+    procs.forget(proc)
     t.join(timeout=2)
     if job:
         job.on_cancel = None

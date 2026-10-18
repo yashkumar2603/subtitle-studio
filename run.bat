@@ -32,4 +32,5 @@ if errorlevel 1 (
   exit /b 1
 )
 uv run --no-sync python -m app %*
-pause
+rem Keep the window open only if something went wrong.
+if errorlevel 1 pause

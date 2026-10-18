@@ -982,7 +982,7 @@ function fillTranscribeOptions() {
   const m = $("#tModel");
   m.innerHTML = "";
   for (const md of S.system.models) {
-    const o = new Option(`${md.label} · ${md.size}`, md.id);
+    const o = new Option(`${md.label} · ${md.downloaded ? "✓ downloaded" : md.size}`, md.id);
     m.appendChild(o);
   }
   const l = $("#tLanguage");
@@ -998,6 +998,17 @@ function fillTranscribeOptions() {
   }
   if (saved.vad !== undefined) $("#tVad").checked = saved.vad;
   if (saved.batched !== undefined) $("#tBatched").checked = saved.batched;
+}
+
+async function refreshModelFlags() {
+  try {
+    S.system = await api("/api/system");
+    const sel = $("#tModel");
+    for (const md of S.system.models) {
+      const o = [...sel.options].find((x) => x.value === md.id);
+      if (o) o.textContent = `${md.label} · ${md.downloaded ? "✓ downloaded" : md.size}`;
+    }
+  } catch {}
 }
 
 function transcribeSettings() {
@@ -1058,6 +1069,7 @@ async function startTranscribe() {
     S.segments = j.result.segments;
     segmentsChanged();
     showTranscribeNotes(j.result, true);
+    refreshModelFlags();
     if (S.segments.length) {
       toast(`Done: ${S.segments.length} lines.`, "ok");
       switchTab("style");

@@ -117,3 +117,30 @@ def test_reveal_colors_newest_word_and_hides_upcoming():
     assert "{\\1c&H0000FF&}two" in events[1]          # newest word in highlight color
     assert "{\\alpha&HFF&}three" in events[1]         # upcoming word hidden
     assert events[2].count("\\1c") == 1               # earlier words back to base color
+
+
+def test_interrupted_model_download_is_not_treated_as_cached(tmp_path):
+    """A snapshot without model.bin (download cut off by closing the app) must be re-downloaded."""
+    import os
+    import subprocess
+    import sys
+
+    snap = tmp_path / "models--Systran--faster-whisper-base" / "snapshots" / "abc123"
+    snap.mkdir(parents=True)
+    (snap.parent.parent / "refs").mkdir()
+    (snap.parent.parent / "refs" / "main").write_text("abc123")
+    (snap / "config.json").write_text("{}")
+    code = "from app.transcribe import cached_model_path as c; print(c('base'))"
+    env = dict(os.environ, HF_HUB_CACHE=str(tmp_path), HF_HUB_OFFLINE="1")
+    run = lambda: subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True).stdout.strip()
+    assert run() == "None"
+    (snap / "model.bin").write_bytes(b"x")
+    assert run().endswith("abc123")
+
+
+def test_windows_job_struct_matches_win64_layout():
+    import ctypes
+
+    from app.procs import _ExtendedLimit
+
+    assert ctypes.sizeof(_ExtendedLimit) == 144  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION on Win64

@@ -127,8 +127,23 @@ a music montage (phantom line removed) and speech surrounded by noise (speech ke
 ## Data
 
 Everything stays in the `data/` folder next to the app: project files (transcript, style, layout),
-uploaded videos, presets, added fonts and the font cache. Whisper models are cached by
-Hugging Face in your user cache folder. Delete `data/` to reset.
+uploaded videos, presets, added fonts and the font cache. Delete `data/` to reset.
+
+Whisper models are downloaded once into the Hugging Face cache and reused on every start, even
+offline and after updating or re-downloading the app:
+
+- Windows: `%USERPROFILE%\.cache\huggingface\hub`
+- Linux / macOS: `~/.cache/huggingface/hub`
+- set `HF_HOME` to put them elsewhere (e.g. another drive)
+
+Downloaded models are marked "✓ downloaded" in the model list. If a download is interrupted
+(app closed mid-download), the next transcription resumes it.
+
+## Stopping
+
+Press `Ctrl+C` or close the terminal window. The app stops immediately: running renders and
+transcriptions are cancelled, ffmpeg is stopped, unfinished output files are removed, and all
+memory (including GPU memory) is released. Your projects are saved continuously, so nothing is lost.
 
 ## Tests
 
